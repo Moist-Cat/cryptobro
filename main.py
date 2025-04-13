@@ -279,12 +279,13 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     plt.Figure: Visualization of the price distribution
     """
     # Convert annualized parameters to daily
-    t = days / 252  # Trading days convention
+    #t = days / 252  # Trading days convention
+    t = 1
     mu_daily = mu * t
     sigma_daily = sigma * np.sqrt(t)
 
     # Analytical method (lognormal distribution)
-    z = norm.ppf(1 - alpha / 2)
+    z = laplace.ppf(1 - alpha / 2)
     log_S = np.log(S0) + (mu - 0.5 * sigma**2) * t
     std_log_S = sigma * np.sqrt(t)
 
@@ -292,7 +293,7 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     upper_analytical = np.exp(log_S + z * std_log_S)
 
     # Monte Carlo simulation
-    daily_returns = np.random.normal(
+    daily_returns = np.random.laplace(
         (mu - 0.5 * sigma**2) * t, sigma * np.sqrt(t), n_sim
     )
     future_prices = S0 * np.exp(daily_returns)
@@ -603,9 +604,9 @@ def main():
         # Parameters (use estimated or manual)
         col1, col2 = st.columns(2)
         with col1:
-            S0 = st.number_input("Initial Price (S₀)", 100.0)
-            strike_price = st.number_input("Strike Price", 105.0)
-            T = st.number_input("Time to Expiry (T)", 30)
+            S0 = st.number_input("Initial Price (S₀)", value=100.0)
+            strike_price = st.number_input("Strike Price", value=105.0)
+            T = st.number_input("Time to Expiry (T)", value=30)
         with col2:
             mu = st.number_input(
                 "Drift (μ)",
@@ -697,11 +698,12 @@ def main():
         if st.button("Validate cofidence interval"):
             res, fig = validate_ci_coverage(
                 #st.session_state.prices,
-                st.session_state.prices[:100],
+                st.session_state.prices,
                 mu,
                 sigma,
                 window_size=5,
-                alpha=0.1,
+                alpha=0.05,
+                #alpha=0.1,
                 n_sim=num_paths,
                 fun=stock_price_ci,
             )
