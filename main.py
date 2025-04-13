@@ -157,6 +157,7 @@ def verify_lognormal(prices):
         "fig_qq": fig_qq,
     }
 
+
 # what the heck am I doing
 def verify_loglaplace(prices):
     """
@@ -183,9 +184,7 @@ def verify_loglaplace(prices):
     fig_hist, ax1 = plt.subplots(figsize=(10, 4))
     ax1.hist(log_ratios, bins=200, density=True, alpha=0.6, label="Log Ratios")
     x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
-    ax1.plot(
-        x, laplace.pdf(x, *laplace.fit(log_ratios)), "r-", label="Fitted Laplace"
-    )
+    ax1.plot(x, laplace.pdf(x, *laplace.fit(log_ratios)), "r-", label="Fitted Laplace")
     ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
     ax1.legend()
 
@@ -221,11 +220,13 @@ def simulate_prices(S0, mu, sigma, T, N, num_paths):
     prices = np.zeros((num_paths, N + 1))
     prices[:, 0] = S0
     for t in range(1, N + 1):
-        #Z = np.random.normal(0, 1, num_paths)
-        #prices[:, t] = prices[:, t - 1] * np.exp(mu * dt + sigma * np.sqrt(dt) * Z)
+        # Z = np.random.normal(0, 1, num_paths)
+        # prices[:, t] = prices[:, t - 1] * np.exp(mu * dt + sigma * np.sqrt(dt) * Z)
         mu = st.session_state.mu_hat
         sigma = st.session_state.sigma_hat
-        prices[:, t] = prices[:, t - 1] * np.exp(np.random.laplace(mu, sigma, num_paths))
+        prices[:, t] = prices[:, t - 1] * np.exp(
+            np.random.laplace(mu, sigma, num_paths)
+        )
     return prices
 
 
@@ -238,30 +239,33 @@ def alpha_based_policy(alpha):
     return "Early Exercise" if alpha > 0 else "Wait Until Expiry"
 
 
-def policy_early_exercise(prices, K):
-    exercise_times = np.argmax(prices > K, axis=1)
+def policy_early_exercise(prices, strike_price):
+    exercise_times = np.argmax(prices > strike_price, axis=1)
     exercise_values = np.array(
-        [prices[i, t] - K if t > 0 else 0 for i, t in enumerate(exercise_times)]
+        [
+            prices[i, t] - strike_price if t > 0 else 0
+            for i, t in enumerate(exercise_times)
+        ]
     )
     return exercise_values, exercise_times
 
 
-def policy_wait_until_expiry(prices, K):
-    exercise_values = np.maximum(prices[:, -1] - K, 0)
+def policy_wait_until_expiry(prices, strike_price):
+    exercise_values = np.maximum(prices[:, -1] - strike_price, 0)
     exercise_times = np.where(exercise_values > 0, prices.shape[1] - 1, 0)
     return exercise_values, exercise_times
 
 
-def policy_alpha_conditional(prices, K, alpha):
+def policy_alpha_conditional(prices, strike_price, alpha):
     if alpha > 0:
-        return policy_early_exercise(prices, K)
-    else:
-        return policy_wait_until_expiry(prices, K)
+        return policy_early_exercise(prices, strike_price)
+    return policy_wait_until_expiry(prices, strike_price)
+
 
 def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     """
     Constructs confidence intervals for future stock prices using lognormal distribution properties.
-    
+
     Parameters:
     S0 (float): Current stock price
     mu (float): Annualized drift (expected return)
@@ -269,7 +273,7 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     days (int): Time horizon in days
     alpha (float): Significance level (default 0.05 for 95% CI)
     n_sim (int): Number of simulations for Monte Carlo approach
-    
+
     Returns:
     dict: Contains confidence intervals and other statistics
     plt.Figure: Visualization of the price distribution
@@ -278,48 +282,46 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     t = days / 252  # Trading days convention
     mu_daily = mu * t
     sigma_daily = sigma * np.sqrt(t)
-    
+
     # Analytical method (lognormal distribution)
-    z = norm.ppf(1 - alpha/2)
-    log_S = np.log(S0) + (mu - 0.5*sigma**2)*t
+    z = norm.ppf(1 - alpha / 2)
+    log_S = np.log(S0) + (mu - 0.5 * sigma**2) * t
     std_log_S = sigma * np.sqrt(t)
-    
-    lower_analytical = np.exp(log_S - z*std_log_S)
-    upper_analytical = np.exp(log_S + z*std_log_S)
-    
+
+    lower_analytical = np.exp(log_S - z * std_log_S)
+    upper_analytical = np.exp(log_S + z * std_log_S)
+
     # Monte Carlo simulation
     daily_returns = np.random.normal(
-        (mu - 0.5*sigma**2)*t, 
-        sigma*np.sqrt(t), 
-        n_sim
+        (mu - 0.5 * sigma**2) * t, sigma * np.sqrt(t), n_sim
     )
     future_prices = S0 * np.exp(daily_returns)
-    
-    lower_mc = np.percentile(future_prices, 100*alpha/2)
-    upper_mc = np.percentile(future_prices, 100*(1-alpha/2))
-    
+
+    lower_mc = np.percentile(future_prices, 100 * alpha / 2)
+    upper_mc = np.percentile(future_prices, 100 * (1 - alpha / 2))
+
     # Visualization
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.hist(future_prices, bins=50, density=True, alpha=0.7)
-    ax.axvline(lower_analytical, color='r', linestyle='--', label='Analytical CI')
-    ax.axvline(upper_analytical, color='r', linestyle='--')
-    ax.axvline(lower_mc, color='g', linestyle=':', label='Monte Carlo CI')
-    ax.axvline(upper_mc, color='g', linestyle=':')
-    ax.set_title(f'Stock Price Distribution After {days} Days')
-    ax.set_xlabel('Price')
-    ax.set_ylabel('Density')
+    ax.axvline(lower_analytical, color="r", linestyle="--", label="Analytical CI")
+    ax.axvline(upper_analytical, color="r", linestyle="--")
+    ax.axvline(lower_mc, color="g", linestyle=":", label="Monte Carlo CI")
+    ax.axvline(upper_mc, color="g", linestyle=":")
+    ax.set_title(f"Stock Price Distribution After {days} Days")
+    ax.set_xlabel("Price")
+    ax.set_ylabel("Density")
     ax.legend()
-    
+
     return {
-        'current_price': S0,
-        'days_ahead': days,
-        'confidence_level': 1-alpha,
-        'analytical_ci': (lower_analytical, upper_analytical),
-        'monte_carlo_ci': (lower_mc, upper_mc),
-        'ci': (lower_analytical, upper_analytical),
-        'mean_price': np.mean(future_prices),
-        'median_price': np.median(future_prices),
-        'probability_above_current': np.mean(future_prices > S0)
+        "current_price": S0,
+        "days_ahead": days,
+        "confidence_level": 1 - alpha,
+        "analytical_ci": (lower_analytical, upper_analytical),
+        "monte_carlo_ci": (lower_mc, upper_mc),
+        "ci": (lower_mc, upper_mc),
+        "mean_price": np.mean(future_prices),
+        "median_price": np.median(future_prices),
+        "probability_above_current": np.mean(future_prices > S0),
     }, fig
 
 
@@ -328,11 +330,11 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
 # ----------------------
 
 
-def evaluate_policies(prices, K, alpha):
+def evaluate_policies(prices, strike_price, alpha):
     policies = {
-        "Early Exercise": policy_early_exercise(prices, K),
-        "Wait Until Expiry": policy_wait_until_expiry(prices, K),
-        "Alpha-Based": policy_alpha_conditional(prices, K, alpha),
+        "Early Exercise": policy_early_exercise(prices, strike_price),
+        "Wait Until Expiry": policy_wait_until_expiry(prices, strike_price),
+        "Alpha-Based": policy_alpha_conditional(prices, strike_price, alpha),
     }
     results = {}
     for name, (values, times) in policies.items():
@@ -345,10 +347,14 @@ def evaluate_policies(prices, K, alpha):
     return pd.DataFrame(results).T
 
 
-def compare_real_vs_simulated(real_prices, simulated_prices, real_strike, simulated_strike):
+def compare_real_vs_simulated(
+    real_prices, simulated_prices, real_strike, simulated_strike
+):
     """Compare real vs simulated payoffs (MSE, stats)."""
-    real_payoff = np.maximum((real_prices[-1] - real_strike)/real_strike, 0)
-    simulated_payoffs = np.maximum((simulated_prices[:, -1] - simulated_strike)/simulated_strike, 0)
+    real_payoff = np.maximum((real_prices[-1] - real_strike) / real_strike, 0)
+    simulated_payoffs = np.maximum(
+        (simulated_prices[:, -1] - simulated_strike) / simulated_strike, 0
+    )
 
     mse = mean_squared_error([real_payoff] * len(simulated_payoffs), simulated_payoffs)
 
@@ -365,10 +371,13 @@ def compare_real_vs_simulated(real_prices, simulated_prices, real_strike, simula
         "Simulated Std": np.std(simulated_payoffs),
     }, fig
 
-def validate_ci_coverage(prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000, fun=stock_price_ci):
+
+def validate_ci_coverage(
+    prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000, fun=stock_price_ci
+):
     """
     Validates CI coverage by checking how often prices stay within predicted intervals.
-    
+
     Parameters:
     prices (array): Historical price data
     mu (float): Annualized drift
@@ -376,7 +385,7 @@ def validate_ci_coverage(prices, mu, sigma, window_size=5, alpha=0.05, n_sim=100
     window_size (int): Days ahead to predict (n in your algorithm)
     alpha (float): Significance level
     n_sim (int): Number of simulations for Monte Carlo CI
-    
+
     Returns:
     dict: Test results including coverage score and detailed statistics
     """
@@ -384,65 +393,69 @@ def validate_ci_coverage(prices, mu, sigma, window_size=5, alpha=0.05, n_sim=100
     total = 0
     violations = []
     ci_widths = []
-    
+
     for i in tqdm(range(len(prices) - window_size)):
         S0 = prices[i]
-        current_window = prices[i:i+window_size+1]  # Include day 0
-        
-        res = stock_price_ci(S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim)
+        current_window = prices[i : i + window_size + 1]  # Include day 0
+
+        res, fig = stock_price_ci(
+            S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim
+        )
+        # we don't care about the figure
+        plt.close()
         lower, upper = res["ci"]
-        
+
         # Check if all future prices are within CI
         within_ci = True
-        for price in current_window[1:]:  # Skip day 0
-            if price < lower or price > upper:
+        for price in current_window[1:]:
+            if price < lower or price > upper and within_ci:
                 within_ci = False
-                violations.append({
-                    'day': i,
-                    'price': price,
-                    'lower': lower,
-                    'upper': upper,
-                    'window': window_size
-                })
+                violations.append(
+                    {
+                        "day": i,
+                        "price": price,
+                        "lower": lower,
+                        "upper": upper,
+                        "window": window_size,
+                    }
+                )
                 break
-                
+
         if within_ci:
             wins += 1
         total += 1
-    
+
     coverage = wins / total
     expected = 1 - alpha
-    
+
     # Plot results
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    
+
     # Coverage plot
-    ax1.axhline(expected, color='r', linestyle='--', label='Expected Coverage')
-    ax1.bar(['Actual'], [coverage], label=f'Actual (n={total})')
+    ax1.axhline(expected, color="r", linestyle="--", label="Expected Coverage")
+    ax1.bar(["Actual"], [coverage], label=f"Actual (n={total})")
     ax1.set_ylim(0, 1)
-    ax1.set_title(f'CI Coverage ({window_size}-day windows)')
+    ax1.set_title(f"CI Coverage ({window_size}-day windows)")
     ax1.legend()
-    
+
     # Violation plot
     if violations:
-        violation_days = [v['day'] for v in violations]
+        violation_days = [v["day"] for v in violations]
         ax2.hist(violation_days, bins=20)
-        ax2.set_title('Distribution of CI Violations Over Time')
-        ax2.set_xlabel('Day in Series')
+        ax2.set_title("Distribution of CI Violations Over Time")
+        ax2.set_xlabel("Day in Series")
     else:
-        ax2.text(0.5, 0.5, 'No Violations', ha='center', va='center')
-    
+        ax2.text(0.5, 0.5, "No Violations", ha="center", va="center")
+
     plt.tight_layout()
-    
+
     return {
-        'coverage_score': coverage,
-        'expected_coverage': expected,
-        'total_windows': total,
-        'successful_windows': wins,
-        'violation_rate': 1 - coverage,
-        'mean_ci_width': np.mean(ci_widths),
-        'median_ci_width': np.median(ci_widths),
-        'violations': violations
+        "coverage_score": coverage,
+        "expected_coverage": expected,
+        "total_windows": total,
+        "successful_windows": wins,
+        "violation_rate": 1 - coverage,
+        "violations": violations,
     }, fig
 
 
@@ -547,7 +560,7 @@ def main():
             with st.expander(
                 "Step 2: Verify distribution with new parameters", expanded=True
             ):
-                #res = verify_lognormal(price_sample)
+                # res = verify_lognormal(price_sample)
                 res = verify_loglaplace(price_sample)
                 ks_stat, p_value = res["ks_test"]
                 shapiro_stat, shapiro_p = res["shapiro_test"]
@@ -622,13 +635,11 @@ def main():
                 st.dataframe(results.style.format("{:.2f}"))
 
             real_prices = st.session_state.prices
-            real_prices = real_prices[2000:2000+T]
+            real_prices = real_prices[2000 : 2000 + T]
             print("INFO - Real prices", real_prices)
             real_strike = strike_price / S0 * real_prices[0]
             with st.expander("Simulation Plot", expanded=True):
-                fig_real = plot_real_prices(
-                    real_prices, real_strike, exercise_day=None
-                )
+                fig_real = plot_real_prices(real_prices, real_strike, exercise_day=None)
                 fig_sim = plot_simulated_prices(
                     simulated_prices, strike_price, expiration_day=T, exercise_days=None
                 )
@@ -639,15 +650,81 @@ def main():
             # If CSV was loaded, compare real vs simulated
             if "prices" in st.session_state and st.session_state.prices is not None:
                 comparison, fig = compare_real_vs_simulated(
-                    real_prices, simulated_prices, real_strike, strike_price,
+                    real_prices,
+                    simulated_prices,
+                    real_strike,
+                    strike_price,
                 )
+
+                with st.expander("Payoff plot", expanded=True):
+                    st.pyplot(fig)
+                with st.expander("Payoff stats", expanded=True):
+                    st.markdown(
+                        f"""
+                    **Real vs Simulated**:  
+                    - Real Payoff = {comparison['Real Payoff']:.2f}  
+                    - Simulated Mean = {comparison['Simulated Mean']:.2f}  
+                    - MSE = {comparison['MSE']:.2f}
+                    """
+                    )
+
+                res, fig = stock_price_ci(S0, mu, sigma, T, 0.05, num_paths)
+
+                confidence = res["confidence_level"]
+                anal_low, anal_high = res["analytical_ci"]
+                anal_low = round(float(anal_low), 2)
+                anal_high = round(float(anal_high), 2)
+
+                mc_low, mc_high = res["monte_carlo_ci"]
+                mc_low = round(float(mc_low), 2)
+                mc_high = round(float(mc_high), 2)
+
+                above = res["probability_above_current"]
+
+                with st.expander("CI Plot", expanded=True):
+                    st.pyplot(fig)
+                with st.expander("CI Stats", expanded=True):
+                    st.markdown(
+                        f"""
+                    **Expected interval**:  
+                    - Confidence = {confidence}  
+                    - lower, upper (M-C) = {mc_low, mc_high}
+                    - lower, upper (Analytic) = {anal_low, anal_high}
+                    - above  = {above}
+                    """
+                    )
+
+        if st.button("Validate cofidence interval"):
+            res, fig = validate_ci_coverage(
+                #st.session_state.prices,
+                st.session_state.prices[:100],
+                mu,
+                sigma,
+                window_size=5,
+                alpha=0.1,
+                n_sim=num_paths,
+                fun=stock_price_ci,
+            )
+
+            with st.expander("Expectation VS Reality", expanded=True):
                 st.pyplot(fig)
+
+            coverage = res["coverage_score"]
+            expected = res["expected_coverage"]
+            violations = res["violations"]
+            violation_rate = res["violation_rate"]
+            total = res["total_windows"]
+            wins = res["successful_windows"]
+
+            with st.expander("CI Validation Stats", expanded=True):
                 st.markdown(
                     f"""
-                **Real vs Simulated**:  
-                - Real Payoff = {comparison['Real Payoff']:.2f}  
-                - Simulated Mean = {comparison['Simulated Mean']:.2f}  
-                - MSE = {comparison['MSE']:.2f}
+                **Confidence interval validation**:  
+                - Coverage = {coverage} 
+                - Expected = {expected} 
+                - Violation rate = {violation_rate} 
+                - Number of window analysed = {total} 
+                - Wins = {wins}
                 """
                 )
 
