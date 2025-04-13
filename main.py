@@ -281,22 +281,18 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # Convert annualized parameters to daily
     #t = days / 252  # Trading days convention
     t = 1
-    mu_daily = mu * t
-    sigma_daily = sigma * np.sqrt(t)
+    mu_daily = mu
+    sigma_daily = sigma
 
-    # Analytical method (lognormal distribution)
-    z = laplace.ppf(1 - alpha / 2)
-    log_S = np.log(S0) + (mu - 0.5 * sigma**2) * t
-    std_log_S = sigma * np.sqrt(t)
-
-    lower_analytical = np.exp(log_S - z * std_log_S)
-    upper_analytical = np.exp(log_S + z * std_log_S)
+    # Analytical method (loglaplace distribution)
+    # NOTE More research is needed. The sum of exp distributes
+    # Gamma.
 
     # Monte Carlo simulation
     daily_returns = np.random.laplace(
-        (mu - 0.5 * sigma**2) * t, sigma * np.sqrt(t), n_sim
+        mu, sigma, n_sim
     )
-    future_prices = S0 * np.exp(daily_returns)
+    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)
 
     lower_mc = np.percentile(future_prices, 100 * alpha / 2)
     upper_mc = np.percentile(future_prices, 100 * (1 - alpha / 2))
@@ -304,8 +300,6 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # Visualization
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.hist(future_prices, bins=50, density=True, alpha=0.7)
-    ax.axvline(lower_analytical, color="r", linestyle="--", label="Analytical CI")
-    ax.axvline(upper_analytical, color="r", linestyle="--")
     ax.axvline(lower_mc, color="g", linestyle=":", label="Monte Carlo CI")
     ax.axvline(upper_mc, color="g", linestyle=":")
     ax.set_title(f"Stock Price Distribution After {days} Days")
@@ -317,7 +311,6 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
         "current_price": S0,
         "days_ahead": days,
         "confidence_level": 1 - alpha,
-        "analytical_ci": (lower_analytical, upper_analytical),
         "monte_carlo_ci": (lower_mc, upper_mc),
         "ci": (lower_mc, upper_mc),
         "mean_price": np.mean(future_prices),
@@ -672,9 +665,6 @@ def main():
                 res, fig = stock_price_ci(S0, mu, sigma, T, 0.05, num_paths)
 
                 confidence = res["confidence_level"]
-                anal_low, anal_high = res["analytical_ci"]
-                anal_low = round(float(anal_low), 2)
-                anal_high = round(float(anal_high), 2)
 
                 mc_low, mc_high = res["monte_carlo_ci"]
                 mc_low = round(float(mc_low), 2)
@@ -690,7 +680,6 @@ def main():
                     **Expected interval**:  
                     - Confidence = {confidence}  
                     - lower, upper (M-C) = {mc_low, mc_high}
-                    - lower, upper (Analytic) = {anal_low, anal_high}
                     - above  = {above}
                     """
                     )
@@ -698,12 +687,12 @@ def main():
         if st.button("Validate cofidence interval"):
             res, fig = validate_ci_coverage(
                 #st.session_state.prices,
-                st.session_state.prices,
+                st.session_state.prices[:100],
                 mu,
                 sigma,
                 window_size=5,
-                alpha=0.05,
-                #alpha=0.1,
+                #alpha=0.05,
+                alpha=0.1,
                 n_sim=num_paths,
                 fun=stock_price_ci,
             )
@@ -725,7 +714,7 @@ def main():
                 - Coverage = {coverage} 
                 - Expected = {expected} 
                 - Violation rate = {violation_rate} 
-                - Number of window analysed = {total} 
+                - Number of windows analysed = {total} 
                 - Wins = {wins}
                 """
                 )
