@@ -29,7 +29,7 @@ def load_csv():
         uploaded_file = st.session_state.file
 
     if uploaded_file:
-        # since we already might have already read it
+        # since we might have read it already
         uploaded_file.seek(0)
         st.session_state.file = uploaded_file
         df = pd.read_csv(uploaded_file)
@@ -42,73 +42,11 @@ def load_csv():
                 break
         else:
             print("WARNING - Could not determine price column")
-            prices = df.iloc[:, 0]  # Assume first column is price
+            prices = df.iloc[:, 0]  # Assume first column is price (bad assumption)
 
         st.session_state.df = prices
         return prices.values
     return None
-
-
-def test_zero_mean(prices, alpha=0.05):
-    """
-    Tests H₀: μ = 0 vs H₁: μ ≠ 0 for log-returns of prices.
-    Assumes normality and n > 30 (uses z-test approximation).
-
-    Parameters:
-    - prices: Array of stock prices
-    - alpha: Significance level
-
-    Returns:
-    - dict containing test results and conclusions
-    - fig: Plot of the test visualization
-    """
-    # Calculate log-returns
-    log_returns = np.log(prices[1:] / prices[:-1])
-    n = len(log_returns)
-    sample_mean = np.mean(log_returns)
-    sample_std = np.std(log_returns, ddof=1)
-
-    # Z-test (since n > 30)
-    z_score = sample_mean / (sample_std / np.sqrt(n))
-    p_value = 2 * (1 - norm.cdf(np.abs(z_score)))  # Two-tailed
-
-    # Critical values
-    z_critical = norm.ppf(1 - alpha / 2)
-    ci_lower = sample_mean - z_critical * sample_std / np.sqrt(n)
-    ci_upper = sample_mean + z_critical * sample_std / np.sqrt(n)
-
-    # Visualization
-    fig, ax = plt.subplots(figsize=(10, 5))
-    x = np.linspace(-4, 4, 1000)
-    ax.plot(x, norm.pdf(x), label="Standard Normal")
-    ax.axvline(z_score, color="r", linestyle="--", label=f"Z-score = {z_score:.2f}")
-    ax.fill_between(
-        x,
-        0,
-        norm.pdf(x),
-        where=(x < -z_critical) | (x > z_critical),
-        color="red",
-        alpha=0.2,
-        label="Rejection Region",
-    )
-    ax.set_title(f"Z-Test for Zero Mean (α = {alpha})")
-    ax.legend()
-
-    return {
-        "n": n,
-        "sample_mean": sample_mean,
-        "sample_std": sample_std,
-        "z_score": z_score,
-        "p_value": p_value,
-        "critical_value": z_critical,
-        "ci_95%": (ci_lower, ci_upper),
-        "reject_H0": p_value < alpha,
-        "conclusion": (
-            "Reject H₀ (mean ≠ 0)"
-            if p_value < alpha
-            else "Fail to reject H₀ (no evidence against μ=0)"
-        ),
-    }, fig
 
 
 # what the heck am I doing
@@ -217,11 +155,11 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
 
     Parameters:
     S0 (float): Current stock price
-    mu (float): Annualized drift (expected return)
-    sigma (float): Annualized volatility
+    mu (float): location of the Laplace
+    sigma (float): scale
     days (int): Time horizon in days
-    alpha (float): Significance level (default 0.05 for 95% CI)
-    n_sim (int): Number of simulations for Monte Carlo approach
+    alpha (float): Error (default 0.05 for 95% CI)
+    n_sim (int): Number of simulations for Monte Carlo approach (only approach for now)
 
     Returns:
     dict: Contains confidence intervals and other statistics
@@ -239,7 +177,9 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # XXX If we simulate all the possible movement of the price
     # for `days` days, it makes the CI way too loose
     # future_prices = simulate_prices(S0, mu, sigma, days, days, n_sim)[:,-1]
-    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)[:, -1]
+    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)[
+        :, -1
+    ]  # the last simulated price corresponds to the price after `days` days
 
     lower_mc = np.percentile(future_prices, 100 * alpha / 2)
     upper_mc = np.percentile(future_prices, 100 * (1 - alpha / 2))
@@ -339,9 +279,7 @@ def validate_ci_coverage(
         S0 = prices[i]
         current_window = prices[i : i + window_size + 1]  # Include day 0
 
-        res, fig = fun(
-            S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim
-        )
+        res, fig = fun(S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim)
         # we don't care about the figure
         plt.close()
         lower, upper = res["ci"]
@@ -505,15 +443,8 @@ def main():
             ):
                 res = verify_loglaplace(price_sample)
                 ks_stat, p_value = res["ks_test"]
-                shapiro_stat, shapiro_p = res["shapiro_test"]
                 fig = res["fig_hist"]
                 qq = res["fig_qq"]
-
-                res, zero_fig = test_zero_mean(price_sample)
-                zero_p = res["p_value"]
-                # literally me
-                zero_int = res["ci_95%"]
-                zero_concl = res["conclusion"]
 
                 st.pyplot(fig)
                 st.pyplot(qq)
@@ -524,16 +455,6 @@ def main():
                 - Statistic = {ks_stat:.4f}  
                 - p-value = {p_value:.4f}  
                 - **Conclusion**: {'It fits the distribution (fail to reject H₀)' if p_value > 0.05 else 'It doesn not fit the distribution (reject H₀)'}
-
-                **Shapiro-Wilk Test**:
-                - Statistic = {shapiro_stat:.4f}  
-                - p-value = {shapiro_p:.4f}  
-                - **Conclusion**: {'It fits the distribution (fail to reject H₀)' if shapiro_p > 0.05 else 'It does not fit the distribution (reject H₀)'}
-
-                **Null Hyphotesis: The mean of the distribution is zero (assumes normality)**:
-                - Confidence interval = {zero_int} 
-                - p-value = {zero_p:.4f}  
-                - **Conclusion**: {zero_concl}
                 """
                 )
 
@@ -634,7 +555,7 @@ def main():
 
         if st.button("Validate cofidence interval"):
             res, fig = validate_ci_coverage(
-                #st.session_state.prices,
+                # st.session_state.prices,
                 st.session_state.prices[:100],
                 mu,
                 sigma,
