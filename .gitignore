@@ -1,0 +1,15 @@
+# vim
+*~
+*.swp
+*.swo
+
+# python
+**/__pycache__/*
+
+# latex
+*.aux
+*.log
+*.out
+
+# notes
+NOTES
