@@ -458,8 +458,6 @@ def main():
                 """
                 )
 
-                st.pyplot(zero_fig)
-
     elif section == "Policy Evaluation":
         st.header("2. Policy Evaluation")
 
