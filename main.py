@@ -1,4 +1,5 @@
-import random
+from collections import Counter
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -16,6 +17,9 @@ from scipy.stats import (
 )
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error
+
+import policy
+from utils import estimate_parameters, simulate_prices, mc_ci
 
 # ----------------------
 # Core Functions
@@ -49,9 +53,6 @@ def load_csv():
     return None
 
 
-# what the heck am I doing
-# NOTE it seems I'm not the first one to use a loglaplace to
-# simulate stocks
 def verify_loglaplace(prices):
     """
     Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
@@ -71,7 +72,6 @@ def verify_loglaplace(prices):
     mean, variance = laplace.fit(log_ratios)
     print(f"INFO - Fitted params {mean=} {variance=}")
     ks_stat, p_value = kstest(log_ratios, "laplace", args=laplace.fit(log_ratios))
-    shapiro_stat, shapiro_p = 0, 0
 
     # Create plots
     fig_hist, ax1 = plt.subplots(figsize=(10, 4))
@@ -91,7 +91,6 @@ def verify_loglaplace(prices):
 
     return {
         "ks_test": (ks_stat, p_value),
-        "shapiro_test": (shapiro_stat, shapiro_p),
         "mean": log_ratios.mean(),
         "std": log_ratios.std(),
         "fig_hist": fig_hist,
@@ -99,56 +98,9 @@ def verify_loglaplace(prices):
     }
 
 
-def estimate_parameters(prices):
-    """Estimate mu and sigma from price data."""
-    ratios = prices[1:] / prices[:-1]
-    log_ratios = np.log(ratios)
-
-    return laplace.fit(log_ratios)
-
-
-def simulate_prices(S0, mu, sigma, T, N, num_paths):
-    prices = np.zeros((num_paths, N + 1))
-    prices[:, 0] = S0
-    for t in range(1, N + 1):
-        prices[:, t] = prices[:, t - 1] * np.exp(
-            np.random.laplace(mu, sigma, num_paths)
-        )
-    return prices
-
-
 # ----------------------
 # Policy Functions
 # ----------------------
-
-
-def alpha_based_policy(alpha):
-    return "Early Exercise" if alpha > 0 else "Wait Until Expiry"
-
-
-def policy_early_exercise(prices, strike_price):
-    exercise_times = np.argmax(prices > strike_price, axis=1)
-    exercise_values = np.array(
-        [
-            prices[i, t] - strike_price if t > 0 else 0
-            for i, t in enumerate(exercise_times)
-        ]
-    )
-    return exercise_values, exercise_times
-
-
-def policy_wait_until_expiry(prices, strike_price):
-    exercise_values = np.maximum(prices[:, -1] - strike_price, 0)
-    exercise_times = np.where(exercise_values > 0, prices.shape[1] - 1, 0)
-    return exercise_values, exercise_times
-
-
-def policy_alpha_conditional(prices, strike_price, alpha):
-    if alpha > 0:
-        return policy_early_exercise(prices, strike_price)
-    return policy_wait_until_expiry(prices, strike_price)
-
-
 def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     """
     Constructs confidence intervals for future stock prices using loglaplace distribution properties.
@@ -169,17 +121,7 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # NOTE More research is needed since the sum of exp distributes
     # Gamma.
 
-    # Monte Carlo simulation
-    # We get the last price since `simulate_prices` simulates the whole thing
-    # NOTE A possible use-case for the rest of the values could be to
-    # construct smaller CIs... but one might as well just re-run the algorithm
-    # with the updated price
-    future_prices = simulate_prices(S0, mu, sigma, days, days, n_sim)[
-        :, -1
-    ]  # the last simulated price corresponds to the price after `days` days
-
-    lower_mc = np.percentile(future_prices, 100 * alpha / 2)
-    upper_mc = np.percentile(future_prices, 100 * (1 - alpha / 2))
+    future_prices, lower_mc, upper_mc = mc_ci(S0, mu, sigma, days, alpha, n_sim)
 
     # Visualization
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -206,50 +148,6 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
 # ----------------------
 # Evaluation Functions
 # ----------------------
-
-
-def evaluate_policies(prices, strike_price, alpha):
-    policies = {
-        "Early Exercise": policy_early_exercise(prices, strike_price),
-        "Wait Until Expiry": policy_wait_until_expiry(prices, strike_price),
-        "Alpha-Based": policy_alpha_conditional(prices, strike_price, alpha),
-    }
-    results = {}
-    for name, (values, times) in policies.items():
-        results[name] = {
-            "Mean Payoff": np.mean(values),
-            "Std Payoff": np.std(values),
-            "Exercise Prob": np.mean(times > 0),
-            "Mean Exercise Time": np.mean(times[times > 0]) if np.any(times > 0) else 0,
-        }
-    return pd.DataFrame(results).T
-
-
-def compare_real_vs_simulated(
-    real_prices, simulated_prices, real_strike, simulated_strike
-):
-    """Compare real vs simulated payoffs (MSE, stats)."""
-    real_payoff = np.maximum((real_prices[-1] - real_strike) / real_strike, 0)
-    simulated_payoffs = np.maximum(
-        (simulated_prices[:, -1] - simulated_strike) / simulated_strike, 0
-    )
-
-    mse = mean_squared_error([real_payoff] * len(simulated_payoffs), simulated_payoffs)
-
-    fig, ax = plt.subplots()
-    ax.hist(simulated_payoffs, bins=200, alpha=0.6, label="Simulated Payoffs")
-    ax.axhline(real_payoff, color="r", linestyle="--", label="Real Payoff")
-    ax.set_title("Simulated vs Real Payoff")
-    ax.legend()
-
-    return {
-        "MSE": mse,
-        "Real Payoff": real_payoff,
-        "Simulated Mean": np.mean(simulated_payoffs),
-        "Simulated Std": np.std(simulated_payoffs),
-    }, fig
-
-
 def validate_ci_coverage(
     prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000, fun=stock_price_ci
 ):
@@ -336,74 +234,6 @@ def validate_ci_coverage(
 
 
 # ----------------------
-# Plotting
-# ---------------------
-
-
-def plot_real_prices(
-    real_prices, strike_price, exercise_day=None, name="Real Stock Price"
-):
-    """Plot real stock prices with strike price and exercise day (if applicable)."""
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(real_prices, label=name, color="blue")
-    ax.axhline(strike_price, color="red", linestyle="--", label="Strike Price")
-
-    if exercise_day is not None and exercise_day < len(real_prices):
-        ax.axvline(exercise_day, color="green", linestyle=":", label="Exercise Day")
-        ax.scatter(
-            exercise_day,
-            real_prices[exercise_day],
-            color="black",
-            s=100,
-            label=f"Exercise Price: {real_prices[exercise_day]:.2f}",
-        )
-
-    ax.set_title(f"{name} with Exercise Policy")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Price")
-    ax.legend()
-    return fig
-
-
-def plot_simulated_prices(
-    simulated_prices, strike_price, expiration_day, exercise_days=None
-):
-    """Plot simulated stock price paths with strike and exercise days (if provided)."""
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    # Plot all simulated paths (transparent lines)
-    for path in simulated_prices:
-        ax.plot(path, alpha=0.1, color="gray")
-
-    # Highlight mean path
-    mean_path = np.mean(simulated_prices, axis=0)
-    ax.plot(mean_path, color="blue", label="Mean Simulated Price")
-
-    # Key lines
-    ax.axhline(strike_price, color="red", linestyle="--", label="Strike Price")
-    ax.axvline(expiration_day, color="purple", linestyle="-.", label="Expiration Day")
-
-    # Exercise markers (if provided)
-    if exercise_days is not None:
-        for i, day in enumerate(exercise_days):
-            if day > 0:  # Only plot if exercised
-                ax.scatter(
-                    day,
-                    simulated_prices[i, day],
-                    color="black",
-                    s=50,
-                    alpha=0.5,
-                    label=f"Exercise Day (Path {i+1})" if i == 0 else "",
-                )
-
-    ax.set_title("Simulated Stock Paths with Exercise Policy")
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Price")
-    ax.legend()
-    return fig
-
-
-# ----------------------
 # Streamlit App
 # ----------------------
 
@@ -411,7 +241,9 @@ def plot_simulated_prices(
 def main():
     st.title("Option Exercise Policy Analyzer")
     st.sidebar.header("Navigation")
-    section = st.sidebar.radio("Go to", ["CSV Validation", "Policy Evaluation"])
+    section = st.sidebar.radio(
+        "Go to", ["CSV Validation", "CI Evaluation", "Policy Experimentation"]
+    )
 
     if section == "CSV Validation":
         st.header("1. CSV Validation & Distribution Test")
@@ -419,9 +251,7 @@ def main():
         st.session_state.prices = prices
 
         if prices is not None:
-            price_sample = (
-                st.session_state.df.values
-            )
+            price_sample = st.session_state.df.values
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
                 st.markdown(
@@ -455,15 +285,14 @@ def main():
                 """
                 )
 
-    elif section == "Policy Evaluation":
-        st.header("2. Policy Evaluation")
+    elif section == "CI Evaluation":
+        st.header("2. CI Evaluation")
 
         # Parameters (use estimated or manual)
         col1, col2 = st.columns(2)
         with col1:
             S0 = st.number_input("Initial Price (S₀)", value=100.0)
-            strike_price = st.number_input("Strike Price", value=105.0)
-            T = st.number_input("Time to Expiry (T)", value=5)
+            T = st.number_input("Days (T)", value=5)
             aleph = st.number_input("Error (alpha)", value=0.1)
         with col2:
             mu = st.number_input(
@@ -480,52 +309,8 @@ def main():
             )
             num_paths = st.number_input("Paths", 1000)
 
-        alpha = mu + 0.5 * sigma**2
-        st.markdown(
-            f"**$\\alpha = \\mu + \\sigma^2/2 = {alpha:.4f}$** → **Policy: {alpha_based_policy(alpha)}**"
-        )
-
-        if st.button("Run Policy Simulation"):
-            with st.expander("Simulation Results", expanded=True):
-                simulated_prices = simulate_prices(
-                    S0, mu, sigma, T, T, num_paths
-                )  # T steps = T days
-                results = evaluate_policies(simulated_prices, strike_price, alpha)
-                st.dataframe(results.style.format("{:.2f}"))
-
-            real_prices = st.session_state.prices
-            real_prices = real_prices[2000 : 2000 + T]
-            print("INFO - Real prices", real_prices)
-            real_strike = strike_price / S0 * real_prices[0]
-            with st.expander("Simulation Plot", expanded=True):
-                fig_real = plot_real_prices(real_prices, real_strike, exercise_day=None)
-                fig_sim = plot_simulated_prices(
-                    simulated_prices, strike_price, expiration_day=T, exercise_days=None
-                )
-
-                st.pyplot(fig_real)
-                st.pyplot(fig_sim)
-
+        if st.button("Run CI Simulation"):
             if "prices" in st.session_state and st.session_state.prices is not None:
-                comparison, fig = compare_real_vs_simulated(
-                    real_prices,
-                    simulated_prices,
-                    real_strike,
-                    strike_price,
-                )
-
-                with st.expander("Payoff plot", expanded=True):
-                    st.pyplot(fig)
-                with st.expander("Payoff stats", expanded=True):
-                    st.markdown(
-                        f"""
-                    **Real vs Simulated**:  
-                    - Real Payoff = {comparison['Real Payoff']:.2f}  
-                    - Simulated Mean = {comparison['Simulated Mean']:.2f}  
-                    - MSE = {comparison['MSE']:.2f}
-                    """
-                    )
-
                 res, fig = stock_price_ci(S0, mu, sigma, T, aleph, num_paths)
 
                 confidence = res["confidence_level"]
@@ -579,6 +364,53 @@ def main():
                 - Violation rate = {violation_rate} 
                 - Number of windows analysed = {total} 
                 - Wins = {wins}
+                """
+                )
+    elif section == "Policy Experimentation":
+        prices = st.session_state.prices
+        selection = st.sidebar.radio("Select policy", policy.__all__)
+
+        selected_policy = getattr(policy, selection)
+
+        start_state = policy.STATE.copy()
+
+        initial_capital = st.number_input("Capital", value=0)
+        initial_assets = st.number_input("Assets", value=0)
+        risk = st.number_input("Risk", value=0.05)
+
+        start_state["capital"] = initial_capital
+        start_state["assets"] = initial_assets
+
+        if st.button("Run"):
+            state, actions = policy.general_policy(
+                prices, policy=selected_policy, state=start_state, risk=risk,
+            )
+            c = Counter(actions)
+            buy, sell, wait = c[1], c[-1], c[0]
+
+            net_worth = state['stock']*prices[-1] + state['capital']
+
+            with st.expander(f"Results for policy {selection}", expanded=True):
+                st.markdown(
+                    f"""
+                **Balance**
+                - Result:  {'In debt!' if net_worth < 0 else 'Good'}
+                - Net Worth: {net_worth}
+                
+                **Capital**
+                - Initial Capital: {start_state['capital']}
+                - Final Capital: {state['capital']}
+                - Profit: {state['capital'] - start_state['capital']}
+
+                **Assets**
+                - Initial Assets: {start_state['stock']}
+                - Final Assets: {state['stock']}
+                - Difference: {state['stock'] - start_state['stock']}
+
+                **Actions**
+                - Buy: {buy}
+                - Sell: {sell}
+                - Wait: {wait}
                 """
                 )
 
