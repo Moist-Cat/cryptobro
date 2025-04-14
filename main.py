@@ -34,10 +34,12 @@ def load_csv():
         st.session_state.file = uploaded_file
         df = pd.read_csv(uploaded_file)
         df = df.dropna()
-        if "Close" in df.columns:
-            prices = df["Close"]
-        elif "Open" in df.columns:
-            prices = df["Open"]
+
+        valid_columns = ["Close", "Open", "Prices", "Price"]
+        for col in valid_columns:
+            if col in df.columns:
+                prices = df[col]
+                break
         else:
             print("WARNING - Could not determine price column")
             prices = df.iloc[:, 0]  # Assume first column is price
@@ -109,56 +111,9 @@ def test_zero_mean(prices, alpha=0.05):
     }, fig
 
 
-def verify_lognormal(prices):
-    """
-    Check if price ratios Y_n = S_n/S_{n-1} are lognormal.
-    Returns:
-    - ks_stat, p_value: Kolmogorov-Smirnov test results
-    - shapiro_stat, shapiro_p: Shapiro-Wilk test results
-    - fig_hist: Histogram plot
-    - fig_qq: Q-Q plot
-    """
-    ratios = prices[1:] / prices[:-1]
-    log_ratios = np.log(ratios)
-
-    # Normality tests
-    ks_stat, p_value = kstest(
-        log_ratios, "norm", args=(log_ratios.mean(), log_ratios.std())
-    )
-
-    shapiro_stat, shapiro_p = (
-        shapiro(log_ratios) if len(log_ratios) <= 5000 else (np.nan, np.nan)
-    )
-
-    # Create plots
-    fig_hist, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.hist(log_ratios, bins=200, density=True, alpha=0.6, label="Log Ratios")
-    x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
-    ax1.plot(
-        x, norm.pdf(x, log_ratios.mean(), log_ratios.std()), "r-", label="Fitted Normal"
-    )
-    ax1.set_title("Log-Ratios Distribution vs Normal Fit")
-    ax1.legend()
-
-    fig_qq, ax2 = plt.subplots(figsize=(10, 4))
-    probplot(log_ratios, dist="norm", plot=ax2)
-    ax2.set_title("Q-Q Plot of Log-Ratios")
-    ax2.get_lines()[0].set_markerfacecolor("b")
-    ax2.get_lines()[0].set_markersize(4.0)
-    ax2.get_lines()[1].set_color("r")
-    ax2.get_lines()[1].set_linewidth(2.0)
-
-    return {
-        "ks_test": (ks_stat, p_value),
-        "shapiro_test": (shapiro_stat, shapiro_p),
-        "mean": log_ratios.mean(),
-        "std": log_ratios.std(),
-        "fig_hist": fig_hist,
-        "fig_qq": fig_qq,
-    }
-
-
 # what the heck am I doing
+# NOTE it seems I'm not the first one to use a loglaplace to
+# simulate stocks
 def verify_loglaplace(prices):
     """
     Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
@@ -215,15 +170,9 @@ def estimate_parameters(prices):
 
 
 def simulate_prices(S0, mu, sigma, T, N, num_paths):
-    """Simulate stock prices using GBM."""
-    dt = T / N
     prices = np.zeros((num_paths, N + 1))
     prices[:, 0] = S0
     for t in range(1, N + 1):
-        # Z = np.random.normal(0, 1, num_paths)
-        # prices[:, t] = prices[:, t - 1] * np.exp(mu * dt + sigma * np.sqrt(dt) * Z)
-        mu = st.session_state.mu_hat
-        sigma = st.session_state.sigma_hat
         prices[:, t] = prices[:, t - 1] * np.exp(
             np.random.laplace(mu, sigma, num_paths)
         )
@@ -264,7 +213,7 @@ def policy_alpha_conditional(prices, strike_price, alpha):
 
 def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     """
-    Constructs confidence intervals for future stock prices using lognormal distribution properties.
+    Constructs confidence intervals for future stock prices using loglaplace distribution properties.
 
     Parameters:
     S0 (float): Current stock price
@@ -278,21 +227,19 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     dict: Contains confidence intervals and other statistics
     plt.Figure: Visualization of the price distribution
     """
-    # Convert annualized parameters to daily
-    #t = days / 252  # Trading days convention
-    t = 1
-    mu_daily = mu
-    sigma_daily = sigma
-
     # Analytical method (loglaplace distribution)
-    # NOTE More research is needed. The sum of exp distributes
+    # NOTE More research is needed since the sum of exp distributes
     # Gamma.
 
     # Monte Carlo simulation
-    daily_returns = np.random.laplace(
-        mu, sigma, n_sim
-    )
-    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)
+    # We get the last price since `simulate_prices` simulates the whole thing
+    # NOTE A possible use-case for the rest of the values could be to
+    # construct smaller CIs... but one might as well just re-run the algorithm
+    # with the updated price
+    # XXX If we simulate all the possible movement of the price
+    # for `days` days, it makes the CI way too loose
+    # future_prices = simulate_prices(S0, mu, sigma, days, days, n_sim)[:,-1]
+    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)[:, -1]
 
     lower_mc = np.percentile(future_prices, 100 * alpha / 2)
     upper_mc = np.percentile(future_prices, 100 * (1 - alpha / 2))
@@ -392,7 +339,7 @@ def validate_ci_coverage(
         S0 = prices[i]
         current_window = prices[i : i + window_size + 1]  # Include day 0
 
-        res, fig = stock_price_ci(
+        res, fig = fun(
             S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim
         )
         # we don't care about the figure
@@ -537,14 +484,16 @@ def main():
         st.session_state.prices = prices
 
         if prices is not None:
-            price_sample = st.session_state.df.sample(1000).sort_index().values
+            price_sample = (
+                st.session_state.df.sample(min(1000, len(prices))).sort_index().values
+            )
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
                 st.markdown(
                     f"""
-                **Estimated Parameters**:  
-                - $\hat{{\mu}}$ = {mu_hat:.6f}  
-                - $\hat{{\sigma}}$ = {sigma_hat:.6f}  
+                **Estimated Parameters**:
+                - $\hat{{\mu}}$ = {mu_hat:.6f}
+                - $\hat{{\sigma}}$ = {sigma_hat:.6f}
                 - $\hat{{\\alpha}}$ = {mu_hat + 0.5 * sigma_hat**2:.6f}
                 """
                 )
@@ -554,7 +503,6 @@ def main():
             with st.expander(
                 "Step 2: Verify distribution with new parameters", expanded=True
             ):
-                # res = verify_lognormal(price_sample)
                 res = verify_loglaplace(price_sample)
                 ks_stat, p_value = res["ks_test"]
                 shapiro_stat, shapiro_p = res["shapiro_test"]
@@ -599,7 +547,8 @@ def main():
         with col1:
             S0 = st.number_input("Initial Price (S₀)", value=100.0)
             strike_price = st.number_input("Strike Price", value=105.0)
-            T = st.number_input("Time to Expiry (T)", value=30)
+            T = st.number_input("Time to Expiry (T)", value=5)
+            aleph = st.number_input("Error (alpha)", value=0.1)
         with col2:
             mu = st.number_input(
                 "Drift (μ)",
@@ -641,7 +590,6 @@ def main():
                 st.pyplot(fig_real)
                 st.pyplot(fig_sim)
 
-            # If CSV was loaded, compare real vs simulated
             if "prices" in st.session_state and st.session_state.prices is not None:
                 comparison, fig = compare_real_vs_simulated(
                     real_prices,
@@ -662,7 +610,7 @@ def main():
                     """
                     )
 
-                res, fig = stock_price_ci(S0, mu, sigma, T, 0.05, num_paths)
+                res, fig = stock_price_ci(S0, mu, sigma, T, aleph, num_paths)
 
                 confidence = res["confidence_level"]
 
@@ -690,9 +638,8 @@ def main():
                 st.session_state.prices[:100],
                 mu,
                 sigma,
-                window_size=5,
-                #alpha=0.05,
-                alpha=0.1,
+                window_size=T,
+                alpha=aleph,
                 n_sim=num_paths,
                 fun=stock_price_ci,
             )
