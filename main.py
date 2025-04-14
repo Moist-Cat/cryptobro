@@ -174,10 +174,7 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # NOTE A possible use-case for the rest of the values could be to
     # construct smaller CIs... but one might as well just re-run the algorithm
     # with the updated price
-    # XXX If we simulate all the possible movement of the price
-    # for `days` days, it makes the CI way too loose
-    # future_prices = simulate_prices(S0, mu, sigma, days, days, n_sim)[:,-1]
-    future_prices = simulate_prices(S0, mu, sigma, 1, 1, n_sim)[
+    future_prices = simulate_prices(S0, mu, sigma, days, days, n_sim)[
         :, -1
     ]  # the last simulated price corresponds to the price after `days` days
 
@@ -423,7 +420,7 @@ def main():
 
         if prices is not None:
             price_sample = (
-                st.session_state.df.sample(min(1000, len(prices))).sort_index().values
+                st.session_state.df.values
             )
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
