@@ -50,6 +50,7 @@ def general_policy(prices, policy=None, state=None, risk=0.05):
     state = state or STATE
     # we don't want to modify the original state in any case
     state = state.copy()
+    state["risk"] = risk
 
     location, scale = estimate_parameters(prices)
 

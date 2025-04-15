@@ -1,4 +1,5 @@
 from collections import Counter
+import concurrent.futures
 
 import streamlit as st
 import numpy as np
@@ -238,11 +239,46 @@ def validate_ci_coverage(
 # ----------------------
 
 
+def _show_policy(start_state, state, actions, prices):
+    c = Counter(actions)
+    buy, sell, wait = c[1], c[-1], c[0]
+
+    net_worth = state["stock"] * prices[-1] + state["capital"]
+
+    with st.expander(f"Results for policy", expanded=True):
+        st.markdown(
+            f"""
+        **Balance**
+        - Result:  {'In debt!' if net_worth < 0 else 'Good'}
+        - Net Worth: {net_worth}
+        
+        **Capital**
+        - Initial Capital: {start_state['capital']}
+        - Final Capital: {state['capital']}
+        - Profit: {state['capital'] - start_state['capital']}
+
+        **Assets**
+        - Initial Assets: {start_state['stock']}
+        - Final Assets: {state['stock']}
+        - Difference: {state['stock'] - start_state['stock']}
+
+        **Actions**
+        - Buy: {buy}
+        - Sell: {sell}
+        - Wait: {wait}
+
+        **Risk**
+        - Risk {state['risk']}
+        """
+        )
+
+
 def main():
     st.title("Option Exercise Policy Analyzer")
     st.sidebar.header("Navigation")
     section = st.sidebar.radio(
-        "Go to", ["CSV Validation", "CI Evaluation", "Policy Experimentation"]
+        "Go to",
+        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Analyse Market"],
     )
 
     if section == "CSV Validation":
@@ -370,6 +406,9 @@ def main():
         prices = st.session_state.prices
         selection = st.sidebar.radio("Select policy", policy.__all__)
 
+        mu = st.session_state.mu_hat
+        sigma = st.session_state.sigma_hat
+
         selected_policy = getattr(policy, selection)
 
         start_state = policy.STATE.copy()
@@ -381,36 +420,139 @@ def main():
         start_state["capital"] = initial_capital
         start_state["assets"] = initial_assets
 
+        best_risk = risk
+        forecast = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+        if forecast > 0:
+            forecast = "BUY"
+        elif forecast < 0:
+            forecast = "SELL"
+        else:
+            forecast = "WAIT"
+        st.markdown(
+            f"""
+            **Today's forecast**: {forecast}
+            - Price: {prices[-1]}
+            - Risk: {best_risk}
+        """)
+
         if st.button("Run"):
             state, actions = policy.general_policy(
-                prices, policy=selected_policy, state=start_state, risk=risk,
+                prices,
+                policy=selected_policy,
+                state=start_state,
+                risk=risk,
             )
-            c = Counter(actions)
-            buy, sell, wait = c[1], c[-1], c[0]
+            _show_policy(start_state, state, actions, prices)
 
-            net_worth = state['stock']*prices[-1] + state['capital']
+    elif section == "Analyse Market":
+        prices = st.session_state.prices
+        selection = st.sidebar.radio("Select policy", policy.__all__)
 
-            with st.expander(f"Results for policy {selection}", expanded=True):
+        selected_policy = getattr(policy, selection)
+
+        start_state = policy.STATE.copy()
+
+        initial_capital = st.number_input("Capital", value=0)
+        initial_assets = st.number_input("Assets", value=0)
+        days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
+        risk = st.number_input("Risk", value=0.05)
+
+        start_state["capital"] = initial_capital
+        start_state["assets"] = initial_assets
+
+        mu = st.session_state.mu_hat
+        sigma = st.session_state.sigma_hat
+
+        if st.button("Run"):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+                futures = [
+                    executor.submit(
+                        policy.general_policy,
+                        prices,
+                        selected_policy,
+                        start_state,
+                        alpha / 100,
+                    )
+                    for alpha in range(5, 51, 1)
+                ]
+                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+            results.sort(
+                key=lambda v: v[0]["stock"] * prices[-1] + v[0]["capital"],  # net worth
+                reverse=True,
+            )
+
+            full_positive = [
+                result
+                for result in results
+                if result[0]["capital"] > 0 and result[0]["stock"] > 0
+            ][:3]
+
+            best_fit = results[:3]
+
+            best_risk = best_fit[0][0]["risk"]
+            forecast = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+            if forecast > 0:
+                forecast = "BUY"
+            elif forecast < 0:
+                forecast = "SELL"
+            else:
+                forecast = "WAIT"
+            st.markdown(
+                f"""
+                **Today's forecast**: {forecast}
+                - Price: {prices[-1]}
+                - Risk: {best_risk}
+            """
+            )
+
+            st.markdown("**Best ROI**")
+            for result in best_fit:
+                state, actions = result
+                _show_policy(start_state, state, actions, prices)
+
+            st.markdown("**Best positive outcome**")
+            for result in full_positive:
+                state, actions = result
+                _show_policy(start_state, state, actions, prices)
+
+            st.markdown("**Confidence intervals**")
+            for d in days:
+                res, fig = stock_price_ci(prices[-1], mu, sigma, d, risk, 1000)
+
+                confidence = res["confidence_level"]
+                above = res["probability_above_current"]
+
+                mc_low, mc_high = res["monte_carlo_ci"]
+                mc_low = round(float(mc_low), 2)
+                mc_high = round(float(mc_high), 2)
+
+                with st.expander("CI Stats", expanded=True):
+                    st.markdown(
+                        f"""
+                    **Expected interval ({d} days)**:  
+                    - Confidence = {confidence}  
+                    - lower, upper (M-C) = {mc_low, mc_high}
+                    - above  = {above}
+                    """
+                    )
+
+            res, fig = stock_price_ci(prices[-1], mu, sigma, days[-1], best_risk, 1000)
+
+            confidence = res["confidence_level"]
+            above = res["probability_above_current"]
+
+            mc_low, mc_high = res["monte_carlo_ci"]
+            mc_low = round(float(mc_low), 2)
+            mc_high = round(float(mc_high), 2)
+
+            with st.expander("CI Stats", expanded=True):
                 st.markdown(
                     f"""
-                **Balance**
-                - Result:  {'In debt!' if net_worth < 0 else 'Good'}
-                - Net Worth: {net_worth}
-                
-                **Capital**
-                - Initial Capital: {start_state['capital']}
-                - Final Capital: {state['capital']}
-                - Profit: {state['capital'] - start_state['capital']}
-
-                **Assets**
-                - Initial Assets: {start_state['stock']}
-                - Final Assets: {state['stock']}
-                - Difference: {state['stock'] - start_state['stock']}
-
-                **Actions**
-                - Buy: {buy}
-                - Sell: {sell}
-                - Wait: {wait}
+                **Expected interval ({d} days)**:  
+                - Confidence = {confidence}  
+                - lower, upper (M-C) = {mc_low, mc_high}
+                - above  = {above}
                 """
                 )
 
