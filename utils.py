@@ -1,6 +1,7 @@
 from scipy.stats import laplace
 import numpy as np
 
+
 def estimate_parameters(prices):
     """Estimate mu and sigma from price data."""
     ratios = prices[1:] / prices[:-1]

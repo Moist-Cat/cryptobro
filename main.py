@@ -239,11 +239,13 @@ def validate_ci_coverage(
 # ----------------------
 
 
-def _show_policy(start_state, state, actions, prices):
+def _show_policy(start_state, state, logs, prices):
+    debt = logs["debt"]
+    actions = logs["action"]
     c = Counter(actions)
     buy, sell, wait = c[1], c[-1], c[0]
 
-    net_worth = state["stock"] * prices[-1] + state["capital"]
+    net_worth = policy._net_worth(prices, state)
 
     with st.expander(f"Results for policy", expanded=True):
         st.markdown(
@@ -251,6 +253,8 @@ def _show_policy(start_state, state, actions, prices):
         **Balance**
         - Result:  {'In debt!' if net_worth < 0 else 'Good'}
         - Net Worth: {net_worth}
+        - Days in debt: {len(debt)}
+        - Worst debt: {min(debt) if debt else 0}
         
         **Capital**
         - Initial Capital: {start_state['capital']}
@@ -287,7 +291,11 @@ def main():
         st.session_state.prices = prices
 
         if prices is not None:
-            price_sample = st.session_state.df.values
+            price_sample = (
+                st.session_state.df.sample(min(1000, len(prices) // 2))
+                .sort_index()
+                .values
+            )
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
                 st.markdown(
@@ -433,16 +441,17 @@ def main():
             **Today's forecast**: {forecast}
             - Price: {prices[-1]}
             - Risk: {best_risk}
-        """)
+        """
+        )
 
         if st.button("Run"):
-            state, actions = policy.general_policy(
+            state, logs = policy.general_policy(
                 prices,
                 policy=selected_policy,
                 state=start_state,
                 risk=risk,
             )
-            _show_policy(start_state, state, actions, prices)
+            _show_policy(start_state, state, logs, prices)
 
     elif section == "Analyse Market":
         prices = st.session_state.prices
@@ -473,12 +482,12 @@ def main():
                         start_state,
                         alpha / 100,
                     )
-                    for alpha in range(5, 51, 1)
+                    for alpha in range(5, 100, 1)
                 ]
                 results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
             results.sort(
-                key=lambda v: v[0]["stock"] * prices[-1] + v[0]["capital"],  # net worth
+                key=lambda v: policy._net_worth(prices, v[0]) + 3 * min(v[1]["debt"]),
                 reverse=True,
             )
 
@@ -508,13 +517,13 @@ def main():
 
             st.markdown("**Best ROI**")
             for result in best_fit:
-                state, actions = result
-                _show_policy(start_state, state, actions, prices)
+                state, logs = result
+                _show_policy(start_state, state, logs, prices)
 
             st.markdown("**Best positive outcome**")
             for result in full_positive:
-                state, actions = result
-                _show_policy(start_state, state, actions, prices)
+                state, logs = result
+                _show_policy(start_state, state, logs, prices)
 
             st.markdown("**Confidence intervals**")
             for d in days:
