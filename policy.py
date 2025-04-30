@@ -1,7 +1,6 @@
 from utils import mc_ci, estimate_parameters
 from tqdm import tqdm
-
-__all__ = ["policy_threshold"]
+import random
 
 BUY = 1
 SELL = -1
@@ -14,8 +13,31 @@ STATE = {
 }
 
 
+def _net_worth(prices, state, index=-1):
+    """
+    Implementation-specific net-worth calculation. Works with any float.
+    """
+    return state["stock"] * prices[index] + state["capital"]
+
+
+def _extract_logs(logs: dict, log: dict):
+    """
+    Given
+    logs: dict[list]
+    log: dict
+
+    Merge the dicts by appending the new value and maintaining the same keys.
+    """
+    for key in log.keys():
+        if key not in logs:
+            logs[key] = []
+
+        logs[key].append(log[key])
+
+
+# policies
 def policy_threshold(
-    prices, index, location, scale, risk, window_size=10, after_window=False
+    prices, index, location, scale, risk, window_size=10, before_window=True
 ):
     """
     1. Calculate 10-day moving average
@@ -24,10 +46,10 @@ def policy_threshold(
     The size of the window and wheter to check before or after can be configured.
     """
     if index < window_size:
-        return WAIT
+        return {"action": WAIT, "logs": {}}
     window = sum(prices[index - window_size : index]) / window_size
 
-    S0 = prices[index - window_size * after_window]  # True/False are integers
+    S0 = prices[index - window_size * before_window]  # True/False are integers
 
     _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
 
@@ -36,11 +58,33 @@ def policy_threshold(
     C = window
     result = (C - A) / (B - A)
 
+    action = WAIT
+
     if result > 0.9:
-        return SELL
+        action = SELL
     elif result < 0.1:
-        return BUY
-    return WAIT
+        action = BUY
+
+    return {
+        "action": action,
+        "logs": {
+            "ci": (lower_mc, higher_mc),
+            "moving_average": window,
+        },
+    }
+
+
+def policy_monkey(prices, index, location, scale, risk):
+    """
+    Random. Use this to judge if your policy sucks.
+    """
+    return {
+        "action": random.choice((-1, 0, 1)),
+        "logs": {},
+    }
+
+
+POLICIES = [policy_threshold, policy_monkey]
 
 
 def execute_action(
@@ -58,18 +102,18 @@ def execute_action(
     state["stock"] += order_size * action
 
 
-def _net_worth(prices, state, index=-1):
-    """
-    Implementation-specific net-worth calculation. Works with any float.
-    """
-    return state["stock"] * prices[index] + state["capital"]
-
-
-def general_policy(prices, policy, state, risk, skip_repeated_actions=False):
+def general_policy(
+    prices, state, risk, policy, handle_action, skip_repeated_actions=False
+):
     """
     In general, iterate the prices and apply a policy.
     Notice prices is simply an iterable, you can generate
     prices using any model and this function will eat them seamlessly.
+
+        handle_action(price, state, action)
+
+    This is a function that decides what to do when executing an action.
+    Modifies the state and returns None.
     """
     policy = policy or (lambda p, i, l, s: 0)
     state = state or STATE
@@ -79,27 +123,55 @@ def general_policy(prices, policy, state, risk, skip_repeated_actions=False):
 
     location, scale = estimate_parameters(prices)
 
+    policy_logs = {}
     action_log = []
-    debt_log = [0]
+    net_log = []
     last_action = 0
+    current_order = (0, float("inf"), float("-inf"))
     for index in tqdm(range(len(prices))):
-        # last prices sub-policy
         price = prices[index]
-        action = policy(prices, index, location, scale, risk)
+
+        if (current_order[1] <= price or current_order[2] >= price) and False:
+            handle_action(price, state, -current_order[0])
+            action_log.append(-current_order[0])
+            health = _net_worth(prices, state, index)
+            net_log.append(health)
+            current_order = (0, float("inf"), float("-inf"))
+            continue
+
+        if current_order[0] and False:
+            action_log.append(WAIT)
+            health = _net_worth(prices, state, index)
+            net_log.append(health)
+            continue
+
+        res = policy(prices, index, location, scale, risk)
+        action = res["action"]
+        _extract_logs(policy_logs, res["logs"])
+
+        if action == BUY:
+            top = 1.05*price
+            bottom = 0.99*price
+            current_order = (action, top, bottom)
+        elif action == SELL:
+            top = 0.99*price
+            bottom = 1.05*price
+            current_order = (action, top, bottom)
+
         # skip "scraping the wave" option
         if action and action == last_action and skip_repeated_actions:
             continue
         last_action = action
         action_log.append(action)
-        execute_action(price, state, action)
+        handle_action(price, state, action)
 
         health = _net_worth(prices, state, index)
-        if health < 0:
-            debt_log.append(health)
+        net_log.append(health)
 
     logs = {
         "action": action_log,
-        "debt": debt_log,
+        "net_worth": net_log,
+        "policy": policy_logs,
     }
 
     return state, logs

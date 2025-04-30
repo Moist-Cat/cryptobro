@@ -1,5 +1,7 @@
 from collections import Counter
 import concurrent.futures
+import functools
+from pathlib import Path
 
 import streamlit as st
 import numpy as np
@@ -20,7 +22,42 @@ from tqdm import tqdm
 from sklearn.metrics import mean_squared_error
 
 import policy
-from utils import estimate_parameters, simulate_prices, mc_ci
+from utils import (
+    estimate_parameters,
+    simulate_prices,
+    mc_ci,
+    get_algorithm_params,
+    param_config,
+    predicate_config,
+)
+
+DIST = laplace
+# DIST = norm
+DIST_NAME = "laplace"
+# DIST_NAME = "norm"
+
+
+def _configure_algorithm(st, algorithms: list, msg="Select alorithm"):
+    algo_names = [fun.__name__ for fun in algorithms]
+
+    algorithm_name = st.sidebar.radio(msg, algo_names)
+    algorithm = lambda: None
+    for a in algorithms:
+        if a.__name__ == algorithm_name:
+            algorithm = a
+
+    params = get_algorithm_params(algorithm)
+    param_values = {}
+
+    st.sidebar.write(f"**Configure parameters for the {algorithm_name} algorithm:**")
+    st.sidebar.write(algorithm.__doc__)
+    param_config(st, params, param_values)
+
+    # We are overwriting the function default values
+    algorithm = functools.partial(algorithm, **param_values)
+
+    return algorithm
+
 
 # ----------------------
 # Core Functions
@@ -49,8 +86,14 @@ def load_csv():
             print("WARNING - Could not determine price column")
             prices = df.iloc[:, 0]  # Assume first column is price (bad assumption)
 
+        # NOTE With large samples, the model begins to deteriorate
+        if len(prices) > 365:
+            prices = prices[-356:]
+
         st.session_state.df = prices
-        return prices.values
+        st.session_state.prices = prices.values
+
+        return st.session_state.prices
     return None
 
 
@@ -70,20 +113,20 @@ def verify_loglaplace(prices):
     log_ratios = np.log(ratios)
 
     # Laplace tests
-    mean, variance = laplace.fit(log_ratios)
+    mean, variance = DIST.fit(log_ratios)
     print(f"INFO - Fitted params {mean=} {variance=}")
-    ks_stat, p_value = kstest(log_ratios, "laplace", args=laplace.fit(log_ratios))
+    ks_stat, p_value = kstest(log_ratios, DIST_NAME, args=DIST.fit(log_ratios))
 
     # Create plots
     fig_hist, ax1 = plt.subplots(figsize=(10, 4))
     ax1.hist(log_ratios, bins=200, density=True, alpha=0.6, label="Log Ratios")
     x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
-    ax1.plot(x, laplace.pdf(x, *laplace.fit(log_ratios)), "r-", label="Fitted Laplace")
+    ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label="Fitted Laplace")
     ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
     ax1.legend()
 
     fig_qq, ax2 = plt.subplots(figsize=(10, 4))
-    probplot(log_ratios, dist="laplace", plot=ax2)
+    probplot(log_ratios, dist=DIST_NAME, plot=ax2)
     ax2.set_title("Q-Q Plot of Log-Ratios")
     ax2.get_lines()[0].set_markerfacecolor("b")
     ax2.get_lines()[0].set_markersize(4.0)
@@ -120,8 +163,7 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     """
     # Analytical method (loglaplace distribution)
     # NOTE More research is needed since the sum of exp distributes
-    # Gamma.
-
+    # Variance?-Gamma.
     future_prices, lower_mc, upper_mc = mc_ci(S0, mu, sigma, days, alpha, n_sim)
 
     # Visualization
@@ -233,6 +275,154 @@ def validate_ci_coverage(
         "violations": violations,
     }, fig
 
+def plot_predictions_vs_outcomes(prices, actions, window=3):
+    """
+    Plots price trajectory with action markers and subsequent window performance
+    Args:
+        prices: Array of historical prices
+        actions: Array of actions (1, 0, -1)
+        window: Days to evaluate after prediction
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Main price plot
+    ax.plot(prices, label='Price', alpha=0.7, linewidth=2)
+    
+    # Calculate future returns
+    future_returns = np.zeros(len(prices))
+    for i in range(len(prices)-window):
+        future_returns[i] = (prices[i+window] / prices[i] - 1) * 100
+    
+    # Plot actions with annotations
+    for i, action in enumerate(actions[:-window]):
+        if not action:
+            continue
+
+        if action == 1:
+            color = "green"
+        else:
+            color = "red"
+
+        ax.scatter(i, prices[i], color=color, alpha=0.8, s=80)
+        #ax.text(i, prices[i], f'{future_returns[i]:+.1f}%', fontsize=8, ha='center', va='top')
+    
+    ax.set_title(f'Trading Signals with Subsequent {window}D Returns')
+    ax.set_xlabel('Days')
+    ax.set_ylabel('Price')
+    st.pyplot(fig)
+
+def calculate_policy_metrics(prices, actions, window=3):
+    """
+    Calculates key performance metrics:
+    1. Signal Accuracy: % of correct directional predictions
+    2. Return Consistency: Average return after each signal type
+    3. Holding Period Analysis: Optimal response window
+    """
+    results = {
+        'buy': {'returns': [], 'correct': 0, 'total': 0},
+        'sell': {'returns': [], 'correct': 0, 'total': 0}
+    }
+    
+    for i in range(len(actions)-window):
+        if actions[i] == 0:
+            continue
+            
+        #future_return = (prices[i+window] - prices[i]) / prices[i]
+        future_return = prices[i+window] - prices[i]
+        action_type = 'buy' if actions[i] == 1 else 'sell'
+        
+        results[action_type]['returns'].append(future_return)
+        results[action_type]['total'] += 1
+        
+        if (action_type == 'buy' and future_return > 0) or \
+           (action_type == 'sell' and future_return < 0):
+            results[action_type]['correct'] += 1
+    
+    # Streamlit metrics display
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("BUY signal", 
+                 f"{results['buy']['total']}",
+                 help="Total BUY signals emitted")
+        
+        if results['buy']['total'] > 0:
+            st.metric("Precision BUY", 
+                     f"{results['buy']['correct']/results['buy']['total']:.1%}",
+                     help="Percent of correct signals")
+            st.metric("Average return", 
+                     f"{np.mean(results['buy']['returns'])*100:.2f}%")
+    
+    with col2:
+        st.metric("SELL signal", 
+                 f"{results['sell']['total']}",
+                 help="Total SELL signals")
+        
+        if results['sell']['total'] > 0:
+            st.metric("Precision SELL", 
+                     f"{results['sell']['correct']/results['sell']['total']:.1%}",
+                     help="Percent of correct signals")
+            st.metric("Average return", 
+                     f"{np.mean(results['sell']['returns'])*100:.2f}%")
+
+def enhanced_evaluation(net_worth, actions, prices):
+    """
+    Improved evaluation considering:
+    1. Risk-adjusted returns (Sharpe Ratio)
+    2. Maximum drawdown
+    3. Prediction consistency
+    4. Debt avoidance penalty
+    """
+    # Maximum Drawdown
+    peak = np.maximum.accumulate(net_worth)
+    drawdown = (peak - net_worth) / peak
+    
+    # Create tabs
+    tab1, tab2, tab3 = st.tabs(["Returns", "Risk", "Details"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        col1.metric("Final net worth", f"${net_worth[-1]:,.2f}")
+        
+        fig1, ax1 = plt.subplots()
+        ax1.plot(net_worth)
+        ax1.set_title("Net worth evolution")
+        st.pyplot(fig1)
+    
+    with tab2:
+        st.metric("Min Balance", f"${np.min(net_worth):,.2f}")
+        
+        fig2, ax2 = plt.subplots()
+        ax2.plot(drawdown)
+        ax2.set_title("Drawdown records")
+        st.pyplot(fig2)
+    
+    with tab3:
+        st.dataframe({
+            "Day": range(len(net_worth)),
+            "Net worth": net_worth,
+            "Min balance": np.min(net_worth),
+        })
+
+# Example usage in Streamlit app
+def policy_validation_page(logs, prices):
+    st.title("Policy validation")
+    
+    with st.expander("Signal analysis", expanded=True):
+        #window = st.slider("Validation window (days)", 1, 10, 3)
+        window = 7
+
+        plot_predictions_vs_outcomes(prices, logs['action'], window)
+
+        calculate_policy_metrics(prices, logs['action'], window)
+    
+    with st.expander("Advanced evaluation"):
+        enhanced_evaluation(
+            logs['net_worth'],
+            logs['action'],
+            prices
+        )
+
 
 # ----------------------
 # Streamlit App
@@ -240,7 +430,7 @@ def validate_ci_coverage(
 
 
 def _show_policy(start_state, state, logs, prices):
-    debt = logs["debt"]
+    debt = [val for val in logs["net_worth"] if val < 0]
     actions = logs["action"]
     c = Counter(actions)
     buy, sell, wait = c[1], c[-1], c[0]
@@ -282,20 +472,15 @@ def main():
     st.sidebar.header("Navigation")
     section = st.sidebar.radio(
         "Go to",
-        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Analyse Market"],
+        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Utils"],
     )
 
     if section == "CSV Validation":
         st.header("1. CSV Validation & Distribution Test")
         prices = load_csv()
-        st.session_state.prices = prices
 
         if prices is not None:
-            price_sample = (
-                st.session_state.df.sample(min(1000, len(prices) // 2))
-                .sort_index()
-                .values
-            )
+            price_sample = st.session_state.prices
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
                 st.markdown(
@@ -351,6 +536,10 @@ def main():
                 step=0.00001,
                 format="%0.5f",
             )
+
+            st.session_state.mu_hat = mu
+            st.session_state.sigma_hat = sigma
+
             num_paths = st.number_input("Paths", 1000)
 
         if st.button("Run CI Simulation"):
@@ -380,7 +569,7 @@ def main():
         if st.button("Validate cofidence interval"):
             res, fig = validate_ci_coverage(
                 # st.session_state.prices,
-                st.session_state.prices[:100],
+                st.session_state.prices,
                 mu,
                 sigma,
                 window_size=T,
@@ -412,24 +601,32 @@ def main():
                 )
     elif section == "Policy Experimentation":
         prices = st.session_state.prices
-        selection = st.sidebar.radio("Select policy", policy.__all__)
+
+        number_of_days = 0
+        risk_val = 0.05
+
+        number_of_days = st.number_input(
+            "Number of days", value=number_of_days, min_value=0, max_value=len(prices) - 1
+        )
+        days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
+        risk = st.number_input("Risk", value=risk_val)
 
         mu = st.session_state.mu_hat
         sigma = st.session_state.sigma_hat
 
-        selected_policy = getattr(policy, selection)
+        general_policy = _configure_algorithm(
+            st, [policy.general_policy], "General policy"
+        )
+        handle_action = _configure_algorithm(
+            st, [policy.execute_action], "Action sub-policy"
+        )
+        selected_policy = _configure_algorithm(st, policy.POLICIES, "Select policy")
 
         start_state = policy.STATE.copy()
 
-        initial_capital = st.number_input("Capital", value=0)
-        initial_assets = st.number_input("Assets", value=0)
-        risk = st.number_input("Risk", value=0.05)
-
-        start_state["capital"] = initial_capital
-        start_state["assets"] = initial_assets
-
         best_risk = risk
-        forecast = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+        res = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+        forecast = res["action"]
         if forecast > 0:
             forecast = "BUY"
         elif forecast < 0:
@@ -444,50 +641,32 @@ def main():
         """
         )
 
-        if st.button("Run"):
-            state, logs = policy.general_policy(
-                prices,
-                policy=selected_policy,
+        if st.button("Run once with alpha"):
+            state, logs = general_policy(
+                prices[:number_of_days],
                 state=start_state,
                 risk=risk,
+                policy=selected_policy,
+                handle_action=handle_action,
             )
             _show_policy(start_state, state, logs, prices)
 
-    elif section == "Analyse Market":
-        prices = st.session_state.prices
-        selection = st.sidebar.radio("Select policy", policy.__all__)
+            policy_validation_page(logs, prices)
 
-        selected_policy = getattr(policy, selection)
-
-        start_state = policy.STATE.copy()
-
-        initial_capital = st.number_input("Capital", value=0)
-        initial_assets = st.number_input("Assets", value=0)
-        days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
-        risk = st.number_input("Risk", value=0.05)
-
-        start_state["capital"] = initial_capital
-        start_state["assets"] = initial_assets
-
-        mu = st.session_state.mu_hat
-        sigma = st.session_state.sigma_hat
-
-        if st.button("Run"):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
-                futures = [
-                    executor.submit(
-                        policy.general_policy,
+        if st.button("Calculate best alpha and run"):
+            results = []
+            for alpha in tqdm(range(5, 100, 1)):
+                results.append(
+                    general_policy(
                         prices,
-                        selected_policy,
-                        start_state,
-                        alpha / 100,
+                        state=start_state,
+                        risk=alpha / 100,
+                        policy=selected_policy,
+                        handle_action=handle_action,
                     )
-                    for alpha in range(5, 100, 1)
-                ]
-                results = [f.result() for f in concurrent.futures.as_completed(futures)]
-
+                )
             results.sort(
-                key=lambda v: policy._net_worth(prices, v[0]) + 3 * min(v[1]["debt"]),
+                key=lambda v: policy._net_worth(prices, v[0]) + 3 * min(v[1]["net_worth"]),
                 reverse=True,
             )
 
@@ -500,7 +679,8 @@ def main():
             best_fit = results[:3]
 
             best_risk = best_fit[0][0]["risk"]
-            forecast = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+            res = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+            forecast = res["action"]
             if forecast > 0:
                 forecast = "BUY"
             elif forecast < 0:
@@ -564,6 +744,34 @@ def main():
                 - above  = {above}
                 """
                 )
+
+    elif section == "Utils":
+        st.markdown(
+            f"""
+        **Variables**:  
+        - mu: {st.session_state.mu_hat}
+        - sigma: {st.session_state.sigma_hat}
+        """
+        )
+
+        S0 = st.number_input("Initial Price (S₀)", value=100.0)
+        T = st.number_input("Days (T)", value=365)
+
+        mu = st.session_state.mu_hat
+        sigma = st.session_state.sigma_hat
+
+        if st.button("Generate Prices"):
+            prices = simulate_prices(S0, mu, sigma, T, 1)
+            df = pd.DataFrame({"Close": prices[0]})
+
+            num = 0
+            file_fmt =  "Downloads/gen{num}.csv"
+            file = Path.home() / file_fmt.format(num=num)
+            while file.exists():
+                num += 1
+                file = Path.home() / file_fmt.format(num=num)
+            df.to_csv(file)
+
 
 
 if __name__ == "__main__":
