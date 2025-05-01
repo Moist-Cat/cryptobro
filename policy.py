@@ -88,17 +88,18 @@ POLICIES = [policy_threshold, policy_monkey]
 
 
 def execute_action(
-    price, state, action: int, order_size=1, buy_everything=True, sell_everything=False
+    price, state, action: int, order_size=1, buy_everything=False, sell_everything=False
 ):
     """
     Execute an action. The order size and (somewhat) dynamic sub-policies to buy and sell can
     be configured
     """
-    state["capital"] -= price * action
     if state["stock"] < 0 and action > 0 and buy_everything:
         order_size = -1 * state["stock"]
     elif state["stock"] > 0 and action < 0 and sell_everything:
         order_size = 1 * state["stock"]
+
+    state["capital"] -= action * order_size * price
     state["stock"] += order_size * action
 
 
@@ -150,12 +151,12 @@ def general_policy(
         _extract_logs(policy_logs, res["logs"])
 
         if action == BUY:
-            top = 1.05*price
-            bottom = 0.99*price
+            top = 1.05 * price
+            bottom = 0.99 * price
             current_order = (action, top, bottom)
         elif action == SELL:
-            top = 0.99*price
-            bottom = 1.05*price
+            top = 0.99 * price
+            bottom = 1.05 * price
             current_order = (action, top, bottom)
 
         # skip "scraping the wave" option

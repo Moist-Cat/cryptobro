@@ -1,7 +1,11 @@
+import math
+import random
+import os
 from collections import Counter
 import concurrent.futures
 import functools
 from pathlib import Path
+import json
 
 import streamlit as st
 import numpy as np
@@ -17,25 +21,157 @@ from scipy.stats import (
     probplot,
     ttest_1samp,
     laplace,
+    cauchy,
 )
 from tqdm import tqdm
-from sklearn.metrics import mean_squared_error
 
 import policy
 from utils import (
     estimate_parameters,
     simulate_prices,
     mc_ci,
+    boot_ci,
     get_algorithm_params,
     param_config,
     predicate_config,
+    general_pca,
 )
 
-DIST = laplace
-# DIST = norm
-DIST_NAME = "laplace"
-# DIST_NAME = "norm"
 
+DIST = laplace
+#DIST = cauchy
+#DIST = norm
+DIST_NAME = "laplace"
+#DIST_NAME = "cauchy"
+#DIST_NAME = "norm"
+
+DB_DIR = Path("./datasets")
+
+
+def show_pca_analysis():
+    st.title("Commodity Data PCA Analysis")
+
+    # Get directory path from user
+    data_dir = st.text_input("Enter directory path containing CSV files:", DB_DIR)
+
+    if st.button("Run Analysis"):
+        results = general_pca(data_dir)
+
+        if "error" in results:
+            st.error(results["error"])
+            return
+
+        st.subheader("Basic Information")
+        st.write(
+            f"Processed {results['matrix_shape'][0]} files with {results['matrix_shape'][1]} days each"
+        )
+        st.write(f"First 5 files used: {results['files_used'][:5]}")
+
+        st.subheader("PCA Statistics")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write("**Explained Variance:**")
+            st.write(results["stats"]["explained_variance"])
+
+        with col2:
+            st.write("**Component Statistics:**")
+            st.json(
+                results["stats"]
+                #'components': results['stats']['n_components'],
+                #'mean_loading': np.mean(results['stats']['component_loadings']),
+                #'total_variance': sum(results['stats']['explained_variance'])
+            )
+
+        figures = {
+            "scree_plot": create_scree_plot(results["pca_model"]),
+            "cumulative_variance": create_cumulative_variance_plot(
+                results["stats"]["cumulative_variance"]
+            ),
+        }
+
+        st.subheader("Visualizations")
+        st.pyplot(figures["scree_plot"])
+        st.pyplot(figures["cumulative_variance"])
+
+        # st.download_button(
+        #    label="Download PCA Results",
+        #    data=json.dumps(results['stats']),
+        #    file_name="pca_results.json"
+        # )
+
+def create_scree_plot(pca):
+    """Create matplotlib figure for scree plot"""
+    fig, ax = plt.subplots()
+    ax.bar(
+        range(1, len(pca.explained_variance_ratio_) + 1), pca.explained_variance_ratio_
+    )
+    ax.set_title("Scree Plot - Explained Variance per Component")
+    ax.set_xlabel("Principal Component")
+    ax.set_ylabel("Explained Variance Ratio")
+    return fig
+
+
+def create_cumulative_variance_plot(cumulative_variance):
+    """Create matplotlib figure for cumulative variance"""
+    fig, ax = plt.subplots()
+    ax.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, "o-")
+    ax.axhline(0.95, color="r", linestyle="--")
+    ax.set_title("Cumulative Explained Variance")
+    ax.set_xlabel("Number of Components")
+    ax.set_ylabel("Cumulative Explained Variance")
+    return fig
+
+def verify_loglaplace(prices):
+    """
+    Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
+    What's that? I mean that the logarithm returns a laplace.
+    Does that exist? Yep.
+    https://en.wikipedia.org/wiki/Log-Laplace_distribution
+    Returns:
+    - ks_stat, p_value: Kolmogorov-Smirnov test results
+    - shapiro_stat, shapiro_p: Shapiro-Wilk test results
+    - fig_hist: Histogram plot
+    - fig_qq: Q-Q plot
+    """
+    ratios = prices[1:] / prices[:-1]
+    log_ratios = np.log(ratios)
+    # log_ratios = ratios
+
+    # Laplace tests
+    mean, variance = DIST.fit(log_ratios)
+    print(f"INFO - Fitted params {mean=} {variance=}")
+    ks_stat, p_value = kstest(log_ratios, DIST_NAME, args=DIST.fit(log_ratios))
+
+    # Create plots
+    fig_hist, ax1 = plt.subplots(figsize=(10, 4))
+    ax1.hist(log_ratios, bins=math.ceil(math.sqrt(len(ratios))), density=True, alpha=0.6, label="Log Ratios")
+    x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
+    ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label="Fitted Laplace")
+    ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
+    ax1.legend()
+
+    fig_qq, ax2 = plt.subplots(figsize=(10, 4))
+    probplot(log_ratios, dist=DIST_NAME, plot=ax2)
+    ax2.set_title("Q-Q Plot of Log-Ratios")
+    ax2.get_lines()[0].set_markerfacecolor("b")
+    ax2.get_lines()[0].set_markersize(4.0)
+    ax2.get_lines()[1].set_color("r")
+    ax2.get_lines()[1].set_linewidth(2.0)
+
+    return {
+        "ks_test": (ks_stat, p_value),
+        "mean": mean,
+        "std": variance,
+        "fig_hist": fig_hist,
+        "fig_qq": fig_qq,
+    }
+
+
+
+# ----------------------
+# Core Functions
+# ----------------------
 
 def _configure_algorithm(st, algorithms: list, msg="Select alorithm"):
     algo_names = [fun.__name__ for fun in algorithms]
@@ -59,17 +195,9 @@ def _configure_algorithm(st, algorithms: list, msg="Select alorithm"):
     return algorithm
 
 
-# ----------------------
-# Core Functions
-# ----------------------
 
-
-def load_csv():
+def load_csv(uploaded_file):
     """Load CSV file and preprocess."""
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    if not uploaded_file:
-        uploaded_file = st.session_state.file
-
     if uploaded_file:
         # since we might have read it already
         uploaded_file.seek(0)
@@ -87,8 +215,6 @@ def load_csv():
             prices = df.iloc[:, 0]  # Assume first column is price (bad assumption)
 
         # NOTE With large samples, the model begins to deteriorate
-        if len(prices) > 365:
-            prices = prices[-356:]
 
         st.session_state.df = prices
         st.session_state.prices = prices.values
@@ -96,54 +222,8 @@ def load_csv():
         return st.session_state.prices
     return None
 
-
-def verify_loglaplace(prices):
-    """
-    Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
-    What's that? I mean that the logarithm returns a laplace.
-    Does that exist? Yep.
-    https://en.wikipedia.org/wiki/Log-Laplace_distribution
-    Returns:
-    - ks_stat, p_value: Kolmogorov-Smirnov test results
-    - shapiro_stat, shapiro_p: Shapiro-Wilk test results
-    - fig_hist: Histogram plot
-    - fig_qq: Q-Q plot
-    """
-    ratios = prices[1:] / prices[:-1]
-    log_ratios = np.log(ratios)
-
-    # Laplace tests
-    mean, variance = DIST.fit(log_ratios)
-    print(f"INFO - Fitted params {mean=} {variance=}")
-    ks_stat, p_value = kstest(log_ratios, DIST_NAME, args=DIST.fit(log_ratios))
-
-    # Create plots
-    fig_hist, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.hist(log_ratios, bins=200, density=True, alpha=0.6, label="Log Ratios")
-    x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
-    ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label="Fitted Laplace")
-    ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
-    ax1.legend()
-
-    fig_qq, ax2 = plt.subplots(figsize=(10, 4))
-    probplot(log_ratios, dist=DIST_NAME, plot=ax2)
-    ax2.set_title("Q-Q Plot of Log-Ratios")
-    ax2.get_lines()[0].set_markerfacecolor("b")
-    ax2.get_lines()[0].set_markersize(4.0)
-    ax2.get_lines()[1].set_color("r")
-    ax2.get_lines()[1].set_linewidth(2.0)
-
-    return {
-        "ks_test": (ks_stat, p_value),
-        "mean": log_ratios.mean(),
-        "std": log_ratios.std(),
-        "fig_hist": fig_hist,
-        "fig_qq": fig_qq,
-    }
-
-
 # ----------------------
-# Policy Functions
+# Utility Functions
 # ----------------------
 def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     """
@@ -164,35 +244,51 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     # Analytical method (loglaplace distribution)
     # NOTE More research is needed since the sum of exp distributes
     # Variance?-Gamma.
-    future_prices, lower_mc, upper_mc = mc_ci(S0, mu, sigma, days, alpha, n_sim)
+    #_, lower_boot, upper_boot = boot_ci(S0, mu, sigma, days, alpha, n_sim)
+    _, lower_boot, upper_boot = (np.array([0.0]), 0.0, 0.0)
 
-    # Visualization
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(future_prices, bins=50, density=True, alpha=0.7)
-    ax.axvline(lower_mc, color="g", linestyle=":", label="Monte Carlo CI")
-    ax.axvline(upper_mc, color="g", linestyle=":")
-    ax.set_title(f"Stock Price Distribution After {days} Days")
-    ax.set_xlabel("Price")
-    ax.set_ylabel("Density")
-    ax.legend()
+    # MC
+    future_prices, lower_mc, upper_mc = mc_ci(S0, mu, sigma, days, alpha, n_sim)
+    #_, lower_mc, upper_mc = (np.array([0.0]), 0.0, 0.0)
 
     return {
         "current_price": S0,
         "days_ahead": days,
         "confidence_level": 1 - alpha,
+        "future_prices": future_prices,
         "monte_carlo_ci": (lower_mc, upper_mc),
+        "bootstrapping_ci": (lower_boot, upper_boot),
         "ci": (lower_mc, upper_mc),
-        "mean_price": np.mean(future_prices),
-        "median_price": np.median(future_prices),
-        "probability_above_current": np.mean(future_prices > S0),
-    }, fig
+        #"ci": (lower_boot, upper_boot),
+    }
 
 
 # ----------------------
 # Evaluation Functions
 # ----------------------
+def process_window(i, prices, window_size, alpha, mu, sigma, n_sim):
+    """Process single window and return violation if exists"""
+    S0 = prices[i]
+    current_window = prices[i:i + window_size + 1]
+    
+    # Get confidence interval
+    res = stock_price_ci(S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim)
+    lower, upper = res["ci"]
+    
+    # Check window
+    for price in current_window[1:]:
+        if not (lower <= price and price <= upper):
+            return {
+                "day": i,
+                "price": price,
+                "lower": lower,
+                "upper": upper,
+                "window": window_size
+            }
+    return None
+
 def validate_ci_coverage(
-    prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000, fun=stock_price_ci
+    prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000
 ):
     """
     Validates CI coverage by checking how often prices stay within predicted intervals.
@@ -208,40 +304,17 @@ def validate_ci_coverage(
     Returns:
     dict: Test results including coverage score and detailed statistics
     """
-    wins = 0
     total = 0
     violations = []
     ci_widths = []
 
     for i in tqdm(range(len(prices) - window_size)):
-        S0 = prices[i]
-        current_window = prices[i : i + window_size + 1]  # Include day 0
-
-        res, fig = fun(S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim)
-        # we don't care about the figure
-        plt.close()
-        lower, upper = res["ci"]
-
-        # Check if all future prices are within CI
-        within_ci = True
-        for price in current_window[1:]:
-            if price < lower or price > upper and within_ci:
-                within_ci = False
-                violations.append(
-                    {
-                        "day": i,
-                        "price": price,
-                        "lower": lower,
-                        "upper": upper,
-                        "window": window_size,
-                    }
-                )
-                break
-
-        if within_ci:
-            wins += 1
+        violation = process_window(i, prices, window_size, alpha, mu, sigma, n_sim)
+        if violation:
+            violations.append(violation)
         total += 1
 
+    wins = total - len(violations)
     coverage = wins / total
     expected = 1 - alpha
 
@@ -275,6 +348,7 @@ def validate_ci_coverage(
         "violations": violations,
     }, fig
 
+
 def plot_predictions_vs_outcomes(prices, actions, window=3):
     """
     Plots price trajectory with action markers and subsequent window performance
@@ -284,15 +358,15 @@ def plot_predictions_vs_outcomes(prices, actions, window=3):
         window: Days to evaluate after prediction
     """
     fig, ax = plt.subplots(figsize=(12, 6))
-    
+
     # Main price plot
-    ax.plot(prices, label='Price', alpha=0.7, linewidth=2)
-    
+    ax.plot(prices, label="Price", alpha=0.7, linewidth=2)
+
     # Calculate future returns
     future_returns = np.zeros(len(prices))
-    for i in range(len(prices)-window):
-        future_returns[i] = (prices[i+window] / prices[i] - 1) * 100
-    
+    for i in range(len(prices) - window):
+        future_returns[i] = (prices[i + window] / prices[i] - 1) * 100
+
     # Plot actions with annotations
     for i, action in enumerate(actions[:-window]):
         if not action:
@@ -304,14 +378,15 @@ def plot_predictions_vs_outcomes(prices, actions, window=3):
             color = "red"
 
         ax.scatter(i, prices[i], color=color, alpha=0.8, s=80)
-        #ax.text(i, prices[i], f'{future_returns[i]:+.1f}%', fontsize=8, ha='center', va='top')
-    
-    ax.set_title(f'Trading Signals with Subsequent {window}D Returns')
-    ax.set_xlabel('Days')
-    ax.set_ylabel('Price')
+        # ax.text(i, prices[i], f'{future_returns[i]:+.1f}%', fontsize=8, ha='center', va='top')
+
+    ax.set_title(f"Trading Signals with Subsequent {window}D Returns")
+    ax.set_xlabel("Days")
+    ax.set_ylabel("Price")
     st.pyplot(fig)
 
-def calculate_policy_metrics(prices, actions, window=3):
+
+def calculate_policy_metrics(prices, actions, window=5):
     """
     Calculates key performance metrics:
     1. Signal Accuracy: % of correct directional predictions
@@ -319,51 +394,60 @@ def calculate_policy_metrics(prices, actions, window=3):
     3. Holding Period Analysis: Optimal response window
     """
     results = {
-        'buy': {'returns': [], 'correct': 0, 'total': 0},
-        'sell': {'returns': [], 'correct': 0, 'total': 0}
+        "buy": {"returns": [], "correct": 0, "total": 0},
+        "sell": {"returns": [], "correct": 0, "total": 0},
     }
-    
-    for i in range(len(actions)-window):
+
+    for i in range(len(actions) - window):
         if actions[i] == 0:
             continue
-            
-        #future_return = (prices[i+window] - prices[i]) / prices[i]
-        future_return = prices[i+window] - prices[i]
-        action_type = 'buy' if actions[i] == 1 else 'sell'
-        
-        results[action_type]['returns'].append(future_return)
-        results[action_type]['total'] += 1
-        
-        if (action_type == 'buy' and future_return > 0) or \
-           (action_type == 'sell' and future_return < 0):
-            results[action_type]['correct'] += 1
-    
+
+        # future_return = (prices[i+window] - prices[i]) / prices[i]
+        future_return = prices[i + window] - prices[i]
+        future_gain = prices[i + window] / prices[i]
+        action_type = "buy" if actions[i] == 1 else "sell"
+
+        results[action_type]["returns"].append(future_gain - 1)
+        results[action_type]["total"] += 1
+
+        if (action_type == "buy" and future_return > 0) or (
+            action_type == "sell" and future_return < 0
+        ):
+            results[action_type]["correct"] += 1
+
     # Streamlit metrics display
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        st.metric("BUY signal", 
-                 f"{results['buy']['total']}",
-                 help="Total BUY signals emitted")
-        
-        if results['buy']['total'] > 0:
-            st.metric("Precision BUY", 
-                     f"{results['buy']['correct']/results['buy']['total']:.1%}",
-                     help="Percent of correct signals")
-            st.metric("Average return", 
-                     f"{np.mean(results['buy']['returns'])*100:.2f}%")
-    
+        st.metric(
+            "BUY signal", f"{results['buy']['total']}", help="Total BUY signals emitted"
+        )
+
+        if results["buy"]["total"] > 0:
+            st.metric(
+                "Precision BUY",
+                f"{results['buy']['correct']/results['buy']['total']:.1%}",
+                help="Percent of correct signals",
+            )
+            st.metric(
+                "Average return", f"{np.mean(results['buy']['returns'])*100:.2f}%"
+            )
+
     with col2:
-        st.metric("SELL signal", 
-                 f"{results['sell']['total']}",
-                 help="Total SELL signals")
-        
-        if results['sell']['total'] > 0:
-            st.metric("Precision SELL", 
-                     f"{results['sell']['correct']/results['sell']['total']:.1%}",
-                     help="Percent of correct signals")
-            st.metric("Average return", 
-                     f"{np.mean(results['sell']['returns'])*100:.2f}%")
+        st.metric(
+            "SELL signal", f"{results['sell']['total']}", help="Total SELL signals"
+        )
+
+        if results["sell"]["total"] > 0:
+            st.metric(
+                "Precision SELL",
+                f"{results['sell']['correct']/results['sell']['total']:.1%}",
+                help="Percent of correct signals",
+            )
+            st.metric(
+                "Average return", f"{np.mean(results['sell']['returns'])*100:.2f}%"
+            )
+
 
 def enhanced_evaluation(net_worth, actions, prices):
     """
@@ -376,52 +460,51 @@ def enhanced_evaluation(net_worth, actions, prices):
     # Maximum Drawdown
     peak = np.maximum.accumulate(net_worth)
     drawdown = (peak - net_worth) / peak
-    
+
     # Create tabs
     tab1, tab2, tab3 = st.tabs(["Returns", "Risk", "Details"])
-    
+
     with tab1:
         col1, col2 = st.columns(2)
         col1.metric("Final net worth", f"${net_worth[-1]:,.2f}")
-        
+
         fig1, ax1 = plt.subplots()
         ax1.plot(net_worth)
         ax1.set_title("Net worth evolution")
         st.pyplot(fig1)
-    
+
     with tab2:
         st.metric("Min Balance", f"${np.min(net_worth):,.2f}")
-        
+
         fig2, ax2 = plt.subplots()
         ax2.plot(drawdown)
         ax2.set_title("Drawdown records")
         st.pyplot(fig2)
-    
+
     with tab3:
-        st.dataframe({
-            "Day": range(len(net_worth)),
-            "Net worth": net_worth,
-            "Min balance": np.min(net_worth),
-        })
+        st.dataframe(
+            {
+                "Day": range(len(net_worth)),
+                "Net worth": net_worth,
+                "Min balance": np.min(net_worth),
+            }
+        )
+
 
 # Example usage in Streamlit app
 def policy_validation_page(logs, prices):
     st.title("Policy validation")
-    
+
     with st.expander("Signal analysis", expanded=True):
-        #window = st.slider("Validation window (days)", 1, 10, 3)
+        # window = st.slider("Validation window (days)", 1, 10, 3)
         window = 7
 
-        plot_predictions_vs_outcomes(prices, logs['action'], window)
+        plot_predictions_vs_outcomes(prices, logs["action"], window)
 
-        calculate_policy_metrics(prices, logs['action'], window)
-    
+        calculate_policy_metrics(prices, logs["action"], window)
+
     with st.expander("Advanced evaluation"):
-        enhanced_evaluation(
-            logs['net_worth'],
-            logs['action'],
-            prices
-        )
+        enhanced_evaluation(logs["net_worth"], logs["action"], prices)
 
 
 # ----------------------
@@ -477,15 +560,37 @@ def main():
 
     if section == "CSV Validation":
         st.header("1. CSV Validation & Distribution Test")
-        prices = load_csv()
 
-        if prices is not None:
+        resampling = st.checkbox("Ordered resampling", False)
+        size = st.number_input("Sample size (last n if not resampled)", value=350)
+
+        csv_paths = list(DB_DIR.glob("*.csv")) + list(
+            (Path.home() / "Downloads").glob("*.csv")
+        )
+
+        filename = st.selectbox("Select CSV", csv_paths)
+
+        if st.button("Estimate parameters"):
+            uploaded_file = open(filename)
+            prices = load_csv(uploaded_file)
+
+            uploaded_file.close()
+
             price_sample = st.session_state.prices
+            if resampling:
+                start = random.randint(0, max(0, len(price_sample) - (size + 1)))
+                end = min(start + size, len(price_sample))
+            else:
+                end = len(price_sample) - 1
+                start = end - size
+
+            price_sample = price_sample[start:end]
+
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
                 st.markdown(
                     f"""
-                **Estimated Parameters**:
+                **Estimated Parameters for n={len(price_sample)}**:
                 - $\hat{{\mu}}$ = {mu_hat:.6f}
                 - $\hat{{\sigma}}$ = {sigma_hat:.6f}
                 - $\hat{{\\alpha}}$ = {mu_hat + 0.5 * sigma_hat**2:.6f}
@@ -540,11 +645,11 @@ def main():
             st.session_state.mu_hat = mu
             st.session_state.sigma_hat = sigma
 
-            num_paths = st.number_input("Paths", 1000)
+            num_paths = st.number_input("Paths", value=1000)
 
         if st.button("Run CI Simulation"):
             if "prices" in st.session_state and st.session_state.prices is not None:
-                res, fig = stock_price_ci(S0, mu, sigma, T, aleph, num_paths)
+                res = stock_price_ci(S0, mu, sigma, T, aleph, num_paths)
 
                 confidence = res["confidence_level"]
 
@@ -552,7 +657,19 @@ def main():
                 mc_low = round(float(mc_low), 2)
                 mc_high = round(float(mc_high), 2)
 
-                above = res["probability_above_current"]
+                boot_low, boot_high = res["bootstrapping_ci"]
+                boot_low = round(float(boot_low), 2)
+                boot_high = round(float(boot_high), 2)
+
+                # Visualization
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.hist(res["future_prices"], bins=50, density=True, alpha=0.7)
+                ax.axvline(mc_low, color="g", linestyle=":", label="Monte Carlo CI")
+                ax.axvline(mc_high, color="g", linestyle=":")
+                ax.set_title(f"Stock Price Distribution After {T} Days")
+                ax.set_xlabel("Price")
+                ax.set_ylabel("Density")
+                ax.legend()
 
                 with st.expander("CI Plot", expanded=True):
                     st.pyplot(fig)
@@ -562,7 +679,7 @@ def main():
                     **Expected interval**:  
                     - Confidence = {confidence}  
                     - lower, upper (M-C) = {mc_low, mc_high}
-                    - above  = {above}
+                    - lower, upper (B) = {boot_low, boot_high}
                     """
                     )
 
@@ -575,7 +692,6 @@ def main():
                 window_size=T,
                 alpha=aleph,
                 n_sim=num_paths,
-                fun=stock_price_ci,
             )
 
             with st.expander("Expectation VS Reality", expanded=True):
@@ -599,14 +715,20 @@ def main():
                 - Wins = {wins}
                 """
                 )
+
+            with st.expander("Violations", expanded=False):
+                st.json(res["violations"])
     elif section == "Policy Experimentation":
         prices = st.session_state.prices
 
-        number_of_days = 0
-        risk_val = 0.05
+        number_of_days = len(prices) - 1
+        risk_val = 0.95
 
         number_of_days = st.number_input(
-            "Number of days", value=number_of_days, min_value=0, max_value=len(prices) - 1
+            "Number of days",
+            value=number_of_days,
+            min_value=0,
+            max_value=len(prices) - 1,
         )
         days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
         risk = st.number_input("Risk", value=risk_val)
@@ -654,19 +776,42 @@ def main():
             policy_validation_page(logs, prices)
 
         if st.button("Calculate best alpha and run"):
-            results = []
-            for alpha in tqdm(range(5, 100, 1)):
-                results.append(
-                    general_policy(
-                        prices,
-                        state=start_state,
-                        risk=alpha / 100,
-                        policy=selected_policy,
-                        handle_action=handle_action,
-                    )
-                )
+            worker = functools.partial(
+                general_policy,
+                prices=prices,
+                state=start_state,
+                policy=selected_policy,
+                handle_action=handle_action,
+            )
+
+            # Generate alpha values (5 to 99)
+            alpha_values = range(5, 100, 1)
+
+            # Parallel execution with progress tracking
+            with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+                # Map alpha values to risk parameter (α/100)
+                futures = {
+                    executor.submit(worker, risk=alpha / 100): alpha
+                    for alpha in alpha_values
+                }
+
+                # Initialize results list with None values
+                results = [None] * len(alpha_values)
+
+                # Create progress bar
+                with tqdm(total=len(alpha_values), desc="Processing alphas") as pbar:
+                    for future in concurrent.futures.as_completed(futures):
+                        alpha = futures[future]
+                        idx = alpha - alpha_values[0]  # Position in original order
+                        results[idx] = future.result()
+                        pbar.update(1)
+
+            # Remove any None values if using uneven ranges
+            results = [r for r in results if r is not None]
+
             results.sort(
-                key=lambda v: policy._net_worth(prices, v[0]) + 3 * min(v[1]["net_worth"]),
+                key=lambda v: policy._net_worth(prices, v[0])
+                + 3 * min(v[1]["net_worth"]),
                 reverse=True,
             )
 
@@ -755,7 +900,7 @@ def main():
         )
 
         S0 = st.number_input("Initial Price (S₀)", value=100.0)
-        T = st.number_input("Days (T)", value=365)
+        T = st.number_input("Days (T)", value=350)
 
         mu = st.session_state.mu_hat
         sigma = st.session_state.sigma_hat
@@ -765,13 +910,14 @@ def main():
             df = pd.DataFrame({"Close": prices[0]})
 
             num = 0
-            file_fmt =  "Downloads/gen{num}.csv"
+            file_fmt = "Downloads/gen{num}.csv"
             file = Path.home() / file_fmt.format(num=num)
             while file.exists():
                 num += 1
                 file = Path.home() / file_fmt.format(num=num)
             df.to_csv(file)
 
+        show_pca_analysis()
 
 
 if __name__ == "__main__":
