@@ -8,8 +8,6 @@ import hashlib
 #from scipy.stats import norm as laplace
 from scipy.stats import laplace
 from sklearn.decomposition import PCA, TruncatedSVD
-from statsmodels.stats.diagnostic import acorr_ljungbox
-from statsmodels.tsa.stattools import acf
 import numpy as np
 from tqdm import tqdm
 
@@ -19,28 +17,22 @@ from itertools import groupby
 def find_clusters(violations, gap=2):
     """Group consecutive violations within 'gap' days"""
     clusters = []
-    for k, g in groupby(enumerate(violations), lambda x: x[0]-x[1]['day']):
-        group = list(g)
-        if len(group) > 1:  # At least 2 consecutive violations
-            start_day = group[0][1]['day']
-            end_day = group[-1][1]['day']
-            clusters.append((start_day, end_day))
-    return cluster
-
-def test_autocorrelation(returns, lags=15):
-    """Test for autocorrelation in log returns"""
-    lb_test = acorr_ljungbox(returns, lags=lags, return_df=True)
-    return lb_test[['lb_stat', 'lb_pvalue']]
-
-def rolling_autocorrelation(returns, window=30, lag=1):
-    """Rolling autocorrelation at specified lag"""
-    autocorrs = []
-    for i in range(len(returns) - window):
-        window_returns = returns[i:i+window]
-        acf_vals = acf(window_returns, nlags=lag, fft=False)
-        autocorrs.append(acf_vals[lag])
-    return np.array(autocorrs)
-
+    current_cluster = []
+    for v in violations:
+        if current_cluster:
+            if v["day"] <= current_cluster[-1]["day"] + gap:
+                # close enough to cluster
+                current_cluster.append(v)
+            else:
+                # the cluster has been broken
+                # adding a "cluster" of size == 1 is poinless
+                if len(current_cluster) > 2:
+                    clusters.append(current_cluster)
+                current_cluster = [v]
+        else:
+            current_cluster = [v]
+    return clusters
+# pca
 def general_pca(directory_path):
     """
     Processes CSV files in a directory, performs PCA analysis, and returns Streamlit-ready results
@@ -109,53 +101,6 @@ def general_pca(directory_path):
         "matrix_shape": matrix.shape,
         "files_used": valid_files,
     }
-
-# elegant!
-def persistent_lru_cache(maxsize=100000, cache_dir="/var/tmp/.cache", typed=False):
-    """Persistent least-recently-used cache decorator.
-
-    Arguments:
-        maxsize: Maximum number of cached items (None for unlimited)
-        cache_dir: Directory to store cached items
-        typed: If True, arguments of different types will be cached separately
-    """
-    # I can't use shelve to load the whole thing once because it's like a +10 GB
-    def decorator(func):
-        # Ensure cache directory exists
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # Create a unique key for these arguments
-            key = (args, frozenset(kwargs.items())) if kwargs else args
-            # Create a hash of the key for the filename
-            key_hash = hashlib.sha256(pickle.dumps(key)).hexdigest()
-            cache_file = Path(cache_dir) / f"{func.__name__}_{key_hash}.pkl"
-
-            # Try to load from cache
-            if cache_file.exists():
-                with open(cache_file, "rb") as f:
-                    try:
-                        result = pickle.load(f)
-                        return result
-                    except (pickle.PickleError, EOFError) as exc:
-                        pass  # Cache file corrupted, will recompute
-
-            # Compute and cache if not found
-            result = func(*args, **kwargs)
-            with open(cache_file, "wb") as f:
-                pickle.dump(result, f)
-
-            return result
-
-        # Maintain LRU behavior by tracking access times
-        wrapper.cache_info = functools.lru_cache(maxsize=maxsize, typed=typed)(
-            wrapper
-        ).cache_info
-        return wrapper
-
-    return decorator
-
 
 # comfy
 def get_algorithm_params(func):
@@ -305,16 +250,17 @@ def mc_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     construct smaller CIs... but one might as well just re-run the algorithm
     with the updated price
     """
-    future_prices = simulate_prices(S0, mu, sigma, days, n_sim)[
-        :, -1
-    ]  # the last simulated price corresponds to the price after `days` days
+    # Notice we take into account each day!
+    paths = simulate_prices(S0, mu, sigma, days, n_sim)
 
-    lower_mc = np.percentile(future_prices, 100 * alpha / 2, method="median_unbiased")
-    upper_mc = np.percentile(
-        future_prices, 100 * (1 - alpha / 2), method="median_unbiased"
-    )
+    path_min = np.min(paths, axis=1)
+    path_max = np.max(paths, axis=1)
+    
+    # Find tightest [L, U] that contains (1-alpha) paths
+    L = np.percentile(path_min, 100*alpha/2)
+    U = np.percentile(path_max, 100*(1-alpha/2))
 
-    return future_prices, lower_mc, upper_mc
+    return paths[:,-1], L, U
 
 if __name__ == "__main__":
     mc_ci(100, 0, 0.03, days=7, alpha=0.1, n_sim=10000)

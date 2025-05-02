@@ -27,14 +27,20 @@ from tqdm import tqdm
 
 import policy
 from utils import (
+    # stats
     estimate_parameters,
     simulate_prices,
     mc_ci,
     boot_ci,
+    # core
     get_algorithm_params,
     param_config,
     predicate_config,
+    # pca
     general_pca,
+
+    # autocorr
+    find_clusters,
 )
 
 
@@ -47,7 +53,87 @@ DIST_NAME = "laplace"
 
 DB_DIR = Path("./datasets")
 
+def plot_violations(prices, violations, window_size=5):
+    """
+    Plot price series with violation regions highlighted
 
+    Args:
+        prices (array): Historical price data
+        violations (list): List of violation dicts from validation
+        window_size (int): Lookahead window for CIs
+    """
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    # Plot price series
+    ax.plot(prices, color='black', alpha=0.7, label='Price')
+
+    # Create violation patches
+    violation_patches = []
+    colors = []
+
+    for v in violations:
+        # Determine violation type and color
+        if v['price'] < v['lower']:
+            color = 'red'
+            violation_type = "Lower"
+        else:
+            color = 'green'
+            violation_type = "Upper"
+
+        # Create rectangle for violation window
+        rect = Rectangle(
+            (v['day'], v['lower']),
+            width=window_size,
+            height=v['upper'] - v['lower'],
+            alpha=0.2
+        )
+        violation_patches.append(rect)
+        colors.append(color)
+
+        # Mark violation point
+        ax.scatter(v['day']+1, v['price'], color=color, s=100,
+                  label=f'{violation_type} Bound Violation')
+
+    # Add violation regions
+    pc = PatchCollection(violation_patches, alpha=0.2)
+    pc.set_array(np.array([1 if c == 'red' else 0 for c in colors]))
+    ax.add_collection(pc)
+
+    # Create custom legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='black', lw=2, label='Price'),
+        Line2D([0], [0], marker='o', color='w', label='Lower Violation',
+              markerfacecolor='red', markersize=10),
+        Line2D([0], [0], marker='o', color='w', label='Upper Violation',
+              markerfacecolor='green', markersize=10),
+        PatchCollection([Rectangle((0,0),1,1)], alpha=0.2,
+                       label='CI Window', color='gray')
+    ]
+
+    ax.legend(handles=legend_elements, loc='upper left')
+    ax.set_title(f'Price Violations (Window Size: {window_size} days)')
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Price')
+
+    return fig
+
+# Streamlit wrapper
+def st_plot_violations(prices, violations, window_size=5):
+    fig = plot_violations(prices, violations, window_size)
+    st.pyplot(fig)
+
+    # Add summary statistics
+    lower_vios = sum(1 for v in violations if v['price'] < v['lower'])
+    upper_vios = len(violations) - lower_vios
+
+    col1, col2 = st.columns(2)
+    col1.metric("Lower Bound Violations", lower_vios)
+    col2.metric("Upper Bound Violations", upper_vios)
+
+    st.write(f"Total violations: {len(violations)} ({len(violations)/len(prices):.1%} of days)")
+
+# pca
 def show_pca_analysis():
     st.title("Commodity Data PCA Analysis")
 
@@ -496,8 +582,7 @@ def policy_validation_page(logs, prices):
     st.title("Policy validation")
 
     with st.expander("Signal analysis", expanded=True):
-        # window = st.slider("Validation window (days)", 1, 10, 3)
-        window = 7
+        window = 10
 
         plot_predictions_vs_outcomes(prices, logs["action"], window)
 
@@ -555,7 +640,7 @@ def main():
     st.sidebar.header("Navigation")
     section = st.sidebar.radio(
         "Go to",
-        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Utils"],
+        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Agents", "Utils"],
     )
 
     if section == "CSV Validation":
@@ -585,6 +670,7 @@ def main():
                 start = end - size
 
             price_sample = price_sample[start:end]
+            st.session_state.prices = price_sample
 
             with st.expander("Step 1: Estimate Parameters", expanded=True):
                 mu_hat, sigma_hat = estimate_parameters(price_sample)
@@ -684,9 +770,9 @@ def main():
                     )
 
         if st.button("Validate cofidence interval"):
+            prices = st.session_state.prices
             res, fig = validate_ci_coverage(
-                # st.session_state.prices,
-                st.session_state.prices,
+                prices,
                 mu,
                 sigma,
                 window_size=T,
@@ -717,12 +803,34 @@ def main():
                 )
 
             with st.expander("Violations", expanded=False):
-                st.json(res["violations"])
+                st.json(violations)
+
+            if not violations:
+                print("WARNING - No violations found. Avoiding division by zero")
+                violations = [{"day": 0, "lower": 0, "upper": 0, "price": 0}]
+            clusters = find_clusters(violations)
+
+            big = len(max(clusters, key=len))
+            small = len(min(clusters, key=len))
+
+            st.markdown(
+                f"""
+                **Volatility clusters**
+                - biggest: {big}
+                - smallest: {small}
+                - median: {(big + small)/2}
+                - mean: {sum(map(len, clusters))/len(clusters):.2f}
+                - clustered: {sum(map(len, clusters))/len(violations)*100:.2f}%
+                """
+            )
+
+            st_plot_violations(prices, violations)
+
     elif section == "Policy Experimentation":
         prices = st.session_state.prices
 
         number_of_days = len(prices) - 1
-        risk_val = 0.95
+        risk_val = 0.66
 
         number_of_days = st.number_input(
             "Number of days",
@@ -815,13 +923,15 @@ def main():
                 reverse=True,
             )
 
-            full_positive = [
-                result
-                for result in results
-                if result[0]["capital"] > 0 and result[0]["stock"] > 0
-            ][:3]
+            worst = results.copy()
+
+            worst.sort(
+                key=lambda v: policy._net_worth(prices, v[0])
+                + 3 * min(v[1]["net_worth"]),
+            ) # best in reverse reverse order
 
             best_fit = results[:3]
+            worst_case = worst[:3]
 
             best_risk = best_fit[0][0]["risk"]
             res = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
@@ -845,17 +955,16 @@ def main():
                 state, logs = result
                 _show_policy(start_state, state, logs, prices)
 
-            st.markdown("**Best positive outcome**")
-            for result in full_positive:
+            st.markdown("**Worst outcome**")
+            for result in worst_case:
                 state, logs = result
                 _show_policy(start_state, state, logs, prices)
 
             st.markdown("**Confidence intervals**")
             for d in days:
-                res, fig = stock_price_ci(prices[-1], mu, sigma, d, risk, 1000)
+                res = stock_price_ci(prices[-1], mu, sigma, d, risk, 1000)
 
                 confidence = res["confidence_level"]
-                above = res["probability_above_current"]
 
                 mc_low, mc_high = res["monte_carlo_ci"]
                 mc_low = round(float(mc_low), 2)
@@ -867,14 +976,12 @@ def main():
                     **Expected interval ({d} days)**:  
                     - Confidence = {confidence}  
                     - lower, upper (M-C) = {mc_low, mc_high}
-                    - above  = {above}
                     """
                     )
 
-            res, fig = stock_price_ci(prices[-1], mu, sigma, days[-1], best_risk, 1000)
+            res = stock_price_ci(prices[-1], mu, sigma, days[-1], best_risk, 1000)
 
             confidence = res["confidence_level"]
-            above = res["probability_above_current"]
 
             mc_low, mc_high = res["monte_carlo_ci"]
             mc_low = round(float(mc_low), 2)
@@ -886,10 +993,11 @@ def main():
                 **Expected interval ({d} days)**:  
                 - Confidence = {confidence}  
                 - lower, upper (M-C) = {mc_low, mc_high}
-                - above  = {above}
                 """
                 )
 
+    elif section == "Agents":
+       pass 
     elif section == "Utils":
         st.markdown(
             f"""

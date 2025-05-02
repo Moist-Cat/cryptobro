@@ -58,7 +58,7 @@ class AssetScraper:
 
     def _load_existing(self, filepath):
         if os.path.exists(filepath):
-            df = pd.read_csv(filepath, parse_dates=["Date"])
+            df = pd.read_csv(filepath, parse_dates=["Date"], date_format="%Y-%m-%d")
             return df.sort_values("Date")
         return pd.DataFrame(columns=["Date", "Close"])
 
@@ -69,7 +69,12 @@ class AssetScraper:
 
     def _merge_data(self, old, new):
         if not len(new):
-            return old
+            return old.sort_values("Date")
+        if not len(old):
+            return new.sort_values("Date")
+        # make the dates consistent with each other
+        old["Date"] = old["Date"].dt.date
+
         combined = pd.concat([old, new])
         combined = combined.drop_duplicates("Date")
         return combined.sort_values("Date").reset_index(drop=True)
@@ -103,7 +108,7 @@ class BinanceSource(DataSource):
         response = requests.get("https://api.binance.com/api/v3/klines", params=params)
         data = response.json()
 
-        dates = [datetime.fromtimestamp(c[0] / 1000).date() for c in data]
+        dates = [(datetime.fromtimestamp(int(c[0]) / 1000)).date() for c in data]
         close = [c[4] for c in data]
 
         return pd.DataFrame(
@@ -130,6 +135,8 @@ class TwelveDataSource(DataSource):
             raise Exception(response.json().get("message"))
         data = response.json()["values"]
 
+        dates = [datetime.fromisoformat(i["datetime"]).date() for i in data]
+        close = [i["close"] for i in data]
 
         return pd.DataFrame(
             {
@@ -154,7 +161,8 @@ class AlphaVantageSource(DataSource):
         data = response.json()["data"]
 
         data = [
-            (v["date"], v["value"])
+            (datetime.fromisoformat(v["date"]).date(),
+             v["value"])
             for v in data
             if datetime.strptime(v["date"], "%Y-%m-%d") >= start_date and v["value"].split(".")[0].isnumeric()
         ]
@@ -184,8 +192,18 @@ if __name__ == "__main__":
         {"symbol": "XMRUSDT", "type": CRYPTO},
         {"symbol": "SOLUSDT", "type": CRYPTO},
         {"symbol": "BTCUSDT", "type": CRYPTO},
+        {"symbol": "LTCUSDT", "type": CRYPTO},
+    ]
+    _ = [
         {"symbol": "NATURAL_GAS", "type": COMMODITIES},
+        {"symbol": "BRENT", "type": COMMODITIES},
+
         {"symbol": "AAPL", "type": STOCKS},
+        {"symbol": "AMZN", "type": STOCKS},
+        {"symbol": "WMT", "type": STOCKS},
+        {"symbol": "MCD", "type": STOCKS},
+        {"symbol": "KO", "type": STOCKS},
+        {"symbol": "DPZ", "type": STOCKS},
     ]
 
     results = scraper.update_assets(assets)
