@@ -74,7 +74,44 @@ def policy_threshold(
         },
     }
 
-def policy_logmed(
+def policy_mu(
+    prices, index, location, scale, risk, window_size=10, before_window=True
+):
+    """
+    1. Calculate 10-day moving average
+    2. See if it's (almost) outside bounds given an alhpa
+
+    The size of the window and wheter to check before or after can be configured.
+    """
+    if index < window_size:
+        return {"action": WAIT, "logs": {}}
+    window = sum(prices[index - window_size : index]) / window_size
+
+    S0 = prices[index - window_size * before_window]  # True/False are integers
+
+    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
+
+    A = lower_mc
+    B = higher_mc
+    C = window
+    result = (C - A) / (B - A)
+
+    action = WAIT
+
+    if result > 0.9:
+        action = SELL
+    elif result < 0.1:
+        action = BUY
+
+    return {
+        "action": action,
+        "logs": {
+            "ci": (lower_mc, higher_mc),
+            "moving_average": window,
+        },
+    }
+
+def policy_med(
     prices, index, location, scale, risk, window_size=10, before_window=True
 ):
     """
@@ -125,7 +162,7 @@ def policy_monkey(prices, index, location, scale, risk):
     }
 
 
-POLICIES = [policy_threshold, policy_monkey, policy_logmed]
+POLICIES = [policy_threshold, policy_monkey, policy_med]
 
 
 def execute_action(

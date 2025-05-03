@@ -36,7 +36,7 @@ def generate_datasets(real_prices: list, n_sim=1000):
     return synthetic, mixed
 
 
-def _make_samples(prices_list: list):
+def _make_samples(prices_list: list, test_size=31):
     """
     Returns two chunks. One for testing and another for validation.
     The second one is slightly largers. This can be used to evaluate the predictive
@@ -47,24 +47,31 @@ def _make_samples(prices_list: list):
     for prices in prices_list:
         prices_len = len(prices)
         start = random.randint(0, prices_len - 500)
-        end = random.randint(start + 240, prices_len - 31)
+        end = random.randint(start + 240, prices_len - test_size)
 
         test.append(prices[start:end])
-        validation.append(prices[start:end + 31])
+        validation.append(prices[start:end + test_size])
 
     return test, validation
 
 
+# mu
 def infer_trend(trend_vector):
     positive = [1] * len(trend_vector)
     negative = [-1] * len(trend_vector)
 
     if trend_vector == positive:
         return 1
-    elif trend_vector == negative:
-        return -1
+    #elif trend_vector == negative:
+    #    return -1
     return 0
 
+# buy and hold
+def infer_trend(trend_vector):
+    return 1
+
+def infer_trend(trend_vector):
+    return random.choice([-1, 1])
 
 def detect_trends(prices_list, window_sizes):
     """Core trend detection algorithm"""
@@ -97,7 +104,7 @@ def validate_trends(test, validation, trends):
 
 
 def show_trends_with_metrics(prices: list, window_sizes: list):
-    test, validation = _make_samples(prices)
+    test, validation = _make_samples(prices, 200)
     trends = detect_trends(test, window_sizes)
     metrics = validate_trends(test, validation, trends)
 
@@ -205,7 +212,6 @@ def display_final_results(results, n_runs):
         with cols[index]:
             st.markdown(f"### {dataset.capitalize()} Data")
             recall = results[dataset]["guesses"] / results[dataset]["total"]
-            # 100% precise!
             precision = (results[dataset]["guesses"] - results[dataset]["failures"]) / (
                 results[dataset]["guesses"]
             )
@@ -216,7 +222,16 @@ def display_final_results(results, n_runs):
 
     change = [np.sign(c) for c in change]
 
-    cross = pd.crosstab(change, lap_mu).drop(0, axis=1)
+    less_c = sum(1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] == change[i])
+    less_i = sum(1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] != change[i])
+
+    more_c = sum(1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] == change[i])
+    more_i = sum(1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] != change[i])
+
+    print(f"{less_c=} {less_i=} {more_c=} {more_i=}")
+
+    cross = pd.crosstab(change, lap_mu)
+
     cont_table = chi2_contingency(cross)
 
     st.write("**Pearson's chi-squared test**")

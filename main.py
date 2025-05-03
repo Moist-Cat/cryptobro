@@ -11,6 +11,9 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
+from matplotlib.collections import PatchCollection
 from scipy.stats import (
     norm,
     kstest,
@@ -100,7 +103,6 @@ def plot_violations(prices, violations, window_size=5):
     ax.add_collection(pc)
 
     # Create custom legend
-    from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], color='black', lw=2, label='Price'),
         Line2D([0], [0], marker='o', color='w', label='Lower Violation',
@@ -454,7 +456,7 @@ def plot_predictions_vs_outcomes(prices, actions, window=3):
         future_returns[i] = (prices[i + window] / prices[i] - 1) * 100
 
     # Plot actions with annotations
-    for i, action in enumerate(actions[:-window]):
+    for i, action in enumerate(actions):
         if not action:
             continue
 
@@ -582,7 +584,7 @@ def policy_validation_page(logs, prices):
     st.title("Policy validation")
 
     with st.expander("Signal analysis", expanded=True):
-        window = 10
+        window = 30
 
         plot_predictions_vs_outcomes(prices, logs["action"], window)
 
@@ -666,8 +668,8 @@ def main():
                 start = random.randint(0, max(0, len(price_sample) - (size + 1)))
                 end = min(start + size, len(price_sample))
             else:
-                end = len(price_sample) - 1
-                start = end - size
+                end = len(price_sample)
+                start = max(end - size, 0)
 
             price_sample = price_sample[start:end]
             st.session_state.prices = price_sample
@@ -829,14 +831,14 @@ def main():
     elif section == "Policy Experimentation":
         prices = st.session_state.prices
 
-        number_of_days = len(prices) - 1
+        number_of_days = len(prices)
         risk_val = 0.66
 
         number_of_days = st.number_input(
             "Number of days",
             value=number_of_days,
             min_value=0,
-            max_value=len(prices) - 1,
+            max_value=len(prices),
         )
         days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
         risk = st.number_input("Risk", value=risk_val)
