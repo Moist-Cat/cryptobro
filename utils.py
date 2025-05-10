@@ -1,17 +1,15 @@
-import inspect
-import functools
-import pickle
+from statsmodels.tsa.api import ExponentialSmoothing
 import os
-from pathlib import Path
-import hashlib
 
-#from scipy.stats import norm as laplace
-from scipy.stats import laplace
+from scipy.stats import laplace, gennorm
 from sklearn.decomposition import PCA, TruncatedSVD
 import numpy as np
 from tqdm import tqdm
 
-from itertools import groupby
+DIST = gennorm
+#DIST = laplace
+DIST_NAME = "gennorm"
+#DIST_NAME = "laplace"
 
 # autocorrelation
 def find_clusters(violations, gap=2):
@@ -32,6 +30,8 @@ def find_clusters(violations, gap=2):
         else:
             current_cluster = [v]
     return clusters
+
+
 # pca
 def general_pca(directory_path):
     """
@@ -102,165 +102,55 @@ def general_pca(directory_path):
         "files_used": valid_files,
     }
 
-# comfy
-def get_algorithm_params(func):
-    """Returns a dictionary of parameter names and their default values."""
-    signature = inspect.signature(func)
-    return {
-        k: v.default
-        for k, v in signature.parameters.items()
-        if v.default is not inspect.Parameter.empty
-    }
-
-
-# super comfy
-def param_config(st, params, param_values, algo=""):
-    for param, default in params.items():
-        if isinstance(default, bool):
-            param_values[param] = st.sidebar.checkbox(param, default)
-        elif isinstance(default, float) or isinstance(default, int):
-            param_values[param] = st.sidebar.number_input(
-                f"{param} {' of ' + algo if algo else ''}", value=default
-            )
-        elif isinstance(default, dict):
-            # function definition
-            st.sidebar.write(f"Configure behaviour for param `{param}`")
-            algorithm_name = st.sidebar.selectbox(
-                f"Select function to apply for `{param}`", list(default.keys())
-            )
-            algorithm = default[algorithm_name]
-            st.sidebar.write(algorithm.__doc__)
-            # lol, lmao
-            sub_params = get_algorithm_params(algorithm)
-            sub_values = {
-                "function": algorithm,
-            }
-
-            param_config(
-                st, sub_params, sub_values, algo=algo + f" {algorithm_name} for {param}"
-            )
-
-            param_values[param] = sub_values
-        else:
-            param_values[param] = st.sidebar.text_input(param, default)
-
-    return param_values
-
-
-# u-u-ultra comfy
-def predicate_config(st, hypothesis, operators, thesis):
-    param = st.sidebar.selectbox("If", hypothesis)
-    operator = st.sidebar.selectbox("Operator", ["Any", ">", "<", "="])
-    op_value = st.sidebar.number_input("Value", value=0.0)
-    st.sidebar.write("Then:")
-
-    prob = {}
-
-    param_config(st, {"With probability": thesis}, prob)
-
-    return {
-        "param": param,
-        "operator": operator,
-        "value": op_value,
-        "prob": prob,
-    }
-
 
 def estimate_parameters(prices):
     """Estimate mu and sigma from price data."""
     ratios = prices[1:] / prices[:-1]
     log_ratios = np.log(ratios)
 
-    return laplace.fit(log_ratios)
+    return DIST.fit(log_ratios)
 
 
-def simulate_prices(S0, mu, sigma, N, num_paths):
+def simulate_prices(prices, N, num_paths=1, start=0, end=None):
+    """
+    Simulate $N$ days starting from $S_0$. Assumes each
+    ratio distributes Laplace with parameters $mu$ and $sigma$.
+    """
+    if not end:
+        end = len(prices) - 1
+    S0 = prices[end]
+    if start > 45:
+        args = estimate_parameters(prices[start:end+1])
+    else:
+        args = estimate_parameters(prices)
+
     prices = np.zeros((num_paths, N + 1))
     prices[:, 0] = S0
+
+    d = DIST(*args)
     for t in range(1, N + 1):
         prices[:, t] = prices[:, t - 1] * np.exp(
-            np.random.laplace(mu, sigma, num_paths)
+            d.rvs(size=num_paths),
         )
     return prices
 
-def boot_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
+
+def mc_ci(prices, start, end, days=5, alpha=0.05, n_sim=10000):
     """
-    Simulate price paths and compute bootstrapped percentiles
-
-    Args:
-        S0: Initial price
-        mu: Drift parameter
-        sigma: Scale parameter (b for Laplace)
-        N: Number of time steps
-        num_paths: Number of paths to simulate
-        n_bootstrap: Number of bootstrap samples
-        alpha: Confidence level (e.g., 0.05 for 95% CI)
-
-    Returns:
-        dict: {
-            'paths': simulated paths (num_paths × N),
-            'percentiles': bootstrapped percentiles,
-            'ci': confidence intervals for percentiles
-        }
-    """
-    # 1. Simulate base paths (Laplace-distributed log returns)
-    #future_prices = simulate_prices(S0, mu, sigma, days, n_sim)[
-    SIZE = 100
-    future_prices = simulate_prices(S0, mu, sigma, days, SIZE)[
-        :, -1
-    ]
-
-    # 2. Bootstrap percentiles
-    #bootstrap_percentiles = np.zeros((n_sim, 3))  # For 5%, 50%, 95%
-    bootstrap_percentiles = np.zeros((n_sim, 3))  # For 5%, 50%, 95%
-
-    for i in range(n_sim):
-        # Resample paths with replacement
-        idx = np.random.choice(SIZE, size=SIZE, replace=True)
-        resampled = future_prices[idx]
-
-        # Compute percentiles (using symmetry assumption)
-        bootstrap_percentiles[i][0] = np.percentile(resampled, 100*alpha/2, axis=0)  # Lower
-        bootstrap_percentiles[i][1] = np.median(resampled, axis=0)                   # Median
-        bootstrap_percentiles[i][2] = np.percentile(resampled, 100*(1-alpha/2), axis=0)  # Upper
-
-    # 3. Compute mean and CI of percentiles
-    # bold assumption of normality
-    percentiles = {
-        'lower': np.mean(bootstrap_percentiles[:,0], axis=0),
-        'median': np.mean(bootstrap_percentiles[:,1], axis=0),
-        'upper': np.mean(bootstrap_percentiles[:,2], axis=0)
-    }
-
-    ci = {
-        'lower': np.percentile(bootstrap_percentiles[:,0], [2.5, 97.5], axis=0),
-        'median': np.percentile(bootstrap_percentiles[:,1], [2.5, 97.5], axis=0),
-        'upper': np.percentile(bootstrap_percentiles[:,2], [2.5, 97.5], axis=0)
-    }
-
-    return future_prices, percentiles["lower"], percentiles["upper"]
-
-
-
-def mc_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
-    """
-    Monte Carlo simulation
-    We get the last price since `simulate_prices` simulates the whole thing
-    NOTE A possible use-case for the rest of the values could be to
-    construct smaller CIs... but one might as well just re-run the algorithm
-    with the updated price
+    Generate confidence intervals with a Monte Carlo simulation.
     """
     # Notice we take into account each day!
-    paths = simulate_prices(S0, mu, sigma, days, n_sim)
+    paths = simulate_prices(prices, days, n_sim, start=start, end=end)
 
     path_min = np.min(paths, axis=1)
     path_max = np.max(paths, axis=1)
-    
-    # Find tightest [L, U] that contains (1-alpha) paths
-    L = np.percentile(path_min, 100*alpha/2)
-    U = np.percentile(path_max, 100*(1-alpha/2))
 
-    return paths[:,-1], L, U
+    # Find tightest [L, U] that contains (1-alpha) paths
+    L = np.percentile(path_min, 100 * alpha / 2)
+    U = np.percentile(path_max, 100 * (1 - alpha / 2))
+
+    return paths[:, -1], L, U
+
 
 if __name__ == "__main__":
     mc_ci(100, 0, 0.03, days=7, alpha=0.1, n_sim=10000)

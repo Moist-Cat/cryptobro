@@ -1,0 +1,41 @@
+Now, let's try to make the model a bit more complex.
+
+The architecture of our agent will be as follows:
+- Genes
+We will have "genes" with variables that might or might not be optimal to solve our problem. We are going to use this approach to explore the search space of parameters in an heuristic way. The agents will reproduce with each other, evolve, and mutate as usual with evolutionary algorithms.
+The most general implementation would be a vector space (numpy arrays work for this). Each dimension can be a parameter of the RSI indicator, something abstract like "friendliness", or even parameters of a probability distribution to choose certain interactions over others.
+- Brain
+We will use multiple layers for the brain, which we can solve using n-level optimisation algorithms (Think multiple Bilevel optimisations) where the layer zero are simply sensors of the world.
+Each layer will have a "mini-brain" that will try to "distinguish" in the most general sense. For example, in the layer one, the mini brain will check the sensors and will try to understand the world.
+In general, he will want to be able to distinguish if he is being successful or now. In evolutionary terms, he will try to know how well is he surviving, and how is he doing compared to others.
+Since this is a core concept for our model, I will define successーthe evolutionary goal of our little speciesー right here: Generating capital, and avoiding bankruptcy.
+Indeed, bankruptcy will be considered as the "death" of the agent, and "capital" will be considered as a measure of success (it might as well be power, leadership, ... in other context).
+I will say it again: fitness to survive will be measured in terms of being able to distinguish. Distinguish between good and bad genes, distinguish between good and bad interactions, distinguish between good and bad rules, meta-rules...
+Now, with that cleared up, we can model the Level One of the brain of our little species (Level Zero is trivial, a numpy array with the "state of the word", or the section of the world our agent can perceive, as per the BDI model).
+* Brain Level One
+Let's divide this in different tasks:
+- Remember details about the lower level (sensors)
+- Know how well the lower level is doing
+- Analyse the state of the lower level
+Here is where our task becomes more complex. To "analyse" the state (how well are we surviving), we need the ability to distinguish, and compare. This is not trivial to do in the general case, but we can do our best using tools from Linear Algebra and probability. Yes, we can use SVD (in particular, Truncated PCA since the matrix sparse and rectangular) and cosine similarity to compute two things: how well we did after the states similar to the current state happened, and what conclusions can we draw from them. In our case, "how well we did" translates to capital earned five (Configurable! Remember what do we have genes for) days after the signal (action). The conclusions, in this level are, of course, new rules. You will see that we will have to tell the upper level when adding a new rule, since at this level, we don't know how to "think about thinking". We can only perceive the world and make assumptions.
+- Make hypothesis and create
+We discussed this in the previous subsection. Here we infer new knowledge using the information from the analysis.
+Notice we are going to have to use a Taboo Search algorithm here to optimise rule creation and inference. Because looking at all the sensors when thinking will create noise. Taboo search will enable our species to think quickly and reach correct results faster.
+As usual, we want speed so we will use a boolean mask to zero all components we won't use (feel free to suggest another way to do this. The problem is that we want to find patters but not all components coming from the previous level are relevant. We optimise this with Taboo Search).
+- Actions
+Our actions are BUY, SELL, WAIT. Simple, right? We will decide what to do feeding the state rules.
+* Brain Level Two
+Did you guess it yet? Yes, we are going to to exactly the same but here we will work with rules using meta-rules.
+Our "sensors" are now rules but we can perform the same operations over them.
+We only need to be able to distinguish between rules that look alike. Our "rules" are, of course, (numpy) vectors from a vector space so we can use whatever we want to compare them.
+- Remember details about the lower level (rules)
+Simply remember what rules were set to be able to 
+- Know how well the lower level is doing
+- Analyse the state of the lower level
+To verify how well are we doing we can simply check our well-being (capital/net-worth in our case).
+- Make hypothesis and create
+Verify rule changes from the previous level and create meta-rules based on analysis.
+* Brain Level Three
+You can probably guess how this goes from here on. We can create as many layers as we want.
+
+Now, as usual, let's discuss this approach, detect caveats, and clear up any less-than-rigorous sections.

@@ -38,7 +38,7 @@ def _extract_logs(logs: dict, log: dict):
 
 # policies
 def policy_threshold(
-    prices, index, location, scale, risk, window_size=10, before_window=True
+    prices, index, risk, history, window_size=10, before_window=True
 ):
     """
     1. Calculate 10-day moving average
@@ -52,7 +52,7 @@ def policy_threshold(
 
     S0 = prices[index - window_size * before_window]  # True/False are integers
 
-    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
+    _, lower_mc, higher_mc = mc_ci(prices, 0, index, days=window_size, alpha=risk)
 
     A = lower_mc
     B = higher_mc
@@ -74,45 +74,103 @@ def policy_threshold(
         },
     }
 
-def policy_mu(
-    prices, index, location, scale, risk, window_size=10, before_window=True
+
+# rsi
+def policy_rsi(
+    prices,
+    index,
+    risk,
+    history,
+    days=14,
+    overbought=70,
+    oversold=30,
+    risk_adjusted_thresholds=True,
 ):
+    """RSI-based trading policy with risk-adjusted thresholds
+
+    Args:
+        prices: Array of historical prices
+        index: Current time index in the prices array
+        risk: Risk tolerance (0-1) affecting threshold sensitivity
+        history: Trading position history
+        days: RSI calculation period
+        overbought: Default overbought threshold
+        oversold: Default oversold threshold
+        risk_adjusted_thresholds: Whether to adjust thresholds based on risk
+
+    Returns:
+        dict: Trading action (-1, 0, 1) and logs
     """
-    1. Calculate 10-day moving average
-    2. See if it's (almost) outside bounds given an alhpa
+    # Calculate RSI using pure function
+    rsi_value = _calculate_rsi(prices, index, days)
 
-    The size of the window and wheter to check before or after can be configured.
-    """
-    if index < window_size:
-        return {"action": WAIT, "logs": {}}
-    window = sum(prices[index - window_size : index]) / window_size
+    if rsi_value is None:  # Not enough data
+        return {
+            "action": WAIT,
+            "logs": {},
+        }
 
-    S0 = prices[index - window_size * before_window]  # True/False are integers
+    # Adjust thresholds based on risk
+    if risk_adjusted_thresholds:
+        overbought, oversold = _adjust_thresholds(risk, overbought, oversold)
 
-    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
-
-    A = lower_mc
-    B = higher_mc
-    C = window
-    result = (C - A) / (B - A)
-
+    # Determine action
     action = WAIT
-
-    if result > 0.9:
+    if rsi_value >= overbought:
         action = SELL
-    elif result < 0.1:
+    elif rsi_value <= oversold:
         action = BUY
 
     return {
         "action": action,
         "logs": {
-            "ci": (lower_mc, higher_mc),
-            "moving_average": window,
+            "rsi": rsi_value,
+            "overbought": overbought,
+            "oversold": oversold,
         },
     }
+
+
+def _calculate_rsi(prices, current_index, period=14):
+    """Pure function calculating RSI for given index"""
+    if current_index < period:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(current_index - period + 1, current_index + 1):
+        if i == 0:
+            continue
+        change = prices[i] - prices[i - 1]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    avg_gain = sum(gains) / period if gains else 0
+    avg_loss = sum(losses) / period if losses else 0
+
+    if avg_loss == 0:
+        return 100 if avg_gain != 0 else 50
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def _adjust_thresholds(risk, base_overbought, base_oversold):
+    """Adjust RSI thresholds based on risk tolerance (0-1)"""
+    # Higher risk tolerance widens the neutral zone
+    risk_factor = 1 - abs(risk - 0.5) * 2  # 0-1 where 0.5 is neutral
+    adjusted_ob = base_overbought + (30 * (1 - risk_factor))
+    adjusted_os = base_oversold - (30 * (1 - risk_factor))
+
+    # Keep thresholds within reasonable bounds
+    return (min(max(adjusted_ob, 60), 90), max(min(adjusted_os, 40), 10))
+
 
 def policy_med(
-    prices, index, location, scale, risk, window_size=10, before_window=True
+    prices, index, risk, history, window_size=10, before_window=True
 ):
     """
     1. Calculate 10-day moving average
@@ -129,7 +187,7 @@ def policy_med(
 
     S0 = prices[index - window_size * before_window]  # True/False are integers
 
-    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
+    _, lower_mc, higher_mc = mc_ci(prices, 0, index, days=window_size, alpha=risk)
 
     A = lower_mc
     B = higher_mc
@@ -152,7 +210,7 @@ def policy_med(
     }
 
 
-def policy_monkey(prices, index, location, scale, risk):
+def policy_monkey(prices, index, risk, history):
     """
     Random. Use this to judge if your policy sucks.
     """
@@ -162,27 +220,55 @@ def policy_monkey(prices, index, location, scale, risk):
     }
 
 
-POLICIES = [policy_threshold, policy_monkey, policy_med]
+POLICIES = [policy_threshold, policy_monkey, policy_med, policy_rsi]
+
+BASE_CAPITAL = 1 * (10**6)
 
 
-def execute_action(
-    price, state, action: int, order_size=1, buy_everything=False, sell_everything=False
-):
+def _get_order_size(price, volume):
+    return volume // price
+
+
+def execute_action(price, state, action: int):
     """
     Execute an action. The order size and (somewhat) dynamic sub-policies to buy and sell can
     be configured
     """
-    if state["stock"] < 0 and action > 0 and buy_everything:
-        order_size = -1 * state["stock"]
-    elif state["stock"] > 0 and action < 0 and sell_everything:
-        order_size = 1 * state["stock"]
+    # we always want to have the same volume of movement
+    # through all the simulation
+
+    order_size = _get_order_size(price, BASE_CAPITAL)
 
     state["capital"] -= action * order_size * price
     state["stock"] += order_size * action
 
 
+def _get_lookback(risk):
+    if risk > 0.79:
+        return 7
+    elif risk > 0.65:
+        return 15
+    elif risk > 0.49:
+        return 27
+    elif risk > 0.32:
+        return 37
+    elif risk > 0.19:
+        return 45
+    return 45
+
+
 def general_policy(
-    prices, state, risk, policy, handle_action, skip_repeated_actions=False
+    prices,
+    state,
+    risk,
+    policy,
+    handle_action,
+    orders=True,
+    concurrent_orders=False,
+    auto_close=5,
+    reverse_strategy=False,
+    memoryless=False,
+    apply_order=True,
 ):
     """
     In general, iterate the prices and apply a policy.
@@ -193,6 +279,12 @@ def general_policy(
 
     This is a function that decides what to do when executing an action.
     Modifies the state and returns None.
+
+    `orders` enables or disables stop-loss and take-profit
+    `concurrent_orders` enables or disables concurrent orders (if we should wait when we have an order up)
+    `auto_close` Closes a stale order after `auto_close` days. The CIs are calculated using this value so be careful.
+    `memoryless` enables or disables memory (transform our simulation into a Markov process)
+    `apply_order` if you only want to see the orders made by the policy disable this
     """
     policy = policy or (lambda p, i, l, s: 0)
     state = state or STATE
@@ -200,55 +292,75 @@ def general_policy(
     state = state.copy()
     state["risk"] = risk
 
-    location, scale = estimate_parameters(prices)
-
     policy_logs = {}
     action_log = []
     net_log = []
+    # a tuple with
+    # (index (completed), price, order)
+    # where order is a tuple with
+    # (TYPE, upper_bound, lower_bound, index (issues))
+    order_log = []
     last_action = 0
-    current_order = (0, float("inf"), float("-inf"))
+    current_order = (0, float("inf"), float("-inf"), 0)
     for index in tqdm(range(len(prices))):
         price = prices[index]
 
-        if (current_order[1] <= price or current_order[2] >= price) and False:
-            handle_action(price, state, -current_order[0])
-            action_log.append(-current_order[0])
-            health = _net_worth(prices, state, index)
-            net_log.append(health)
-            current_order = (0, float("inf"), float("-inf"))
-            continue
+        # Confidence intervals for stop-loss and profit
+        S0 = price
+        _, lower_mc, higher_mc = mc_ci(prices, 0, index, days=auto_close, alpha=risk)
 
-        if current_order[0] and False:
+        # Close Order
+        # we also sell/buy immediately if the order is too old
+        if (
+            (current_order[1] <= price or current_order[2] >= price)
+            or index - current_order[3] >= auto_close
+        ) and orders:
+            # we complete the operation before doing anything else
+            if not memoryless:
+                handle_action(price, state, -current_order[0])
+            order_log.append((index, price, current_order))
+            current_order = (0, float("inf"), float("-inf"), index)
+
+            # Choose to show logs and make the operation more
+            # `realistic`. This makes the graphic somewhat dirty
+            # so disable it if you want less noise
+            if apply_order:
+                action_log.append(-current_order[0])
+                health = _net_worth(prices, state, index)
+                net_log.append(health)
+                continue
+
+        # we can't place another order if we
+        # already have an order placed
+        if current_order[0] and not concurrent_orders:
             action_log.append(WAIT)
             health = _net_worth(prices, state, index)
             net_log.append(health)
             continue
 
-        res = policy(prices, index, location, scale, risk)
+        res = policy(prices, index, risk, action_log)
         action = res["action"]
+        if reverse_strategy:
+            # no funny bitwise business was posssible *sob*
+            action = -action
         _extract_logs(policy_logs, res["logs"])
 
-        if action == BUY:
-            top = 1.05 * price
-            bottom = 0.99 * price
-            current_order = (action, top, bottom)
-        elif action == SELL:
-            top = 0.99 * price
-            bottom = 1.05 * price
-            current_order = (action, top, bottom)
+        # independant of the order type
+        top = higher_mc
+        bottom = lower_mc
+        current_order = (action, top, bottom, index)
 
-        # skip "scraping the wave" option
-        if action and action == last_action and skip_repeated_actions:
-            continue
         last_action = action
         action_log.append(action)
-        handle_action(price, state, action)
+        if not memoryless:
+            handle_action(price, state, action)
 
         health = _net_worth(prices, state, index)
         net_log.append(health)
 
     logs = {
         "action": action_log,
+        "order": order_log,
         "net_worth": net_log,
         "policy": policy_logs,
     }

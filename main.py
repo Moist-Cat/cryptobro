@@ -23,8 +23,6 @@ from scipy.stats import (
     lognorm,
     probplot,
     ttest_1samp,
-    laplace,
-    cauchy,
 )
 from tqdm import tqdm
 
@@ -34,27 +32,20 @@ from utils import (
     estimate_parameters,
     simulate_prices,
     mc_ci,
-    boot_ci,
-    # core
-    get_algorithm_params,
-    param_config,
-    predicate_config,
     # pca
     general_pca,
-
     # autocorr
     find_clusters,
+    DIST,
+    DIST_NAME,
+)
+from meta import (
+    load_csv,
+    _configure_algorithm,
 )
 
-
-DIST = laplace
-#DIST = cauchy
-#DIST = norm
-DIST_NAME = "laplace"
-#DIST_NAME = "cauchy"
-#DIST_NAME = "norm"
-
 DB_DIR = Path("./datasets")
+
 
 def plot_violations(prices, violations, window_size=5):
     """
@@ -68,7 +59,7 @@ def plot_violations(prices, violations, window_size=5):
     fig, ax = plt.subplots(figsize=(14, 7))
 
     # Plot price series
-    ax.plot(prices, color='black', alpha=0.7, label='Price')
+    ax.plot(prices, color="black", alpha=0.7, label="Price")
 
     # Create violation patches
     violation_patches = []
@@ -76,49 +67,70 @@ def plot_violations(prices, violations, window_size=5):
 
     for v in violations:
         # Determine violation type and color
-        if v['price'] < v['lower']:
-            color = 'red'
+        if v["price"] < v["lower"]:
+            color = "red"
             violation_type = "Lower"
         else:
-            color = 'green'
+            color = "green"
             violation_type = "Upper"
 
         # Create rectangle for violation window
         rect = Rectangle(
-            (v['day'], v['lower']),
+            (v["day"], v["lower"]),
             width=window_size,
-            height=v['upper'] - v['lower'],
-            alpha=0.2
+            height=v["upper"] - v["lower"],
+            alpha=0.2,
         )
         violation_patches.append(rect)
         colors.append(color)
 
         # Mark violation point
-        ax.scatter(v['day']+1, v['price'], color=color, s=100,
-                  label=f'{violation_type} Bound Violation')
+        ax.scatter(
+            v["day"] + 1,
+            v["price"],
+            color=color,
+            s=100,
+            label=f"{violation_type} Bound Violation",
+        )
 
     # Add violation regions
     pc = PatchCollection(violation_patches, alpha=0.2)
-    pc.set_array(np.array([1 if c == 'red' else 0 for c in colors]))
+    pc.set_array(np.array([1 if c == "red" else 0 for c in colors]))
     ax.add_collection(pc)
 
     # Create custom legend
     legend_elements = [
-        Line2D([0], [0], color='black', lw=2, label='Price'),
-        Line2D([0], [0], marker='o', color='w', label='Lower Violation',
-              markerfacecolor='red', markersize=10),
-        Line2D([0], [0], marker='o', color='w', label='Upper Violation',
-              markerfacecolor='green', markersize=10),
-        PatchCollection([Rectangle((0,0),1,1)], alpha=0.2,
-                       label='CI Window', color='gray')
+        Line2D([0], [0], color="black", lw=2, label="Price"),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            label="Lower Violation",
+            markerfacecolor="red",
+            markersize=10,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            label="Upper Violation",
+            markerfacecolor="green",
+            markersize=10,
+        ),
+        PatchCollection(
+            [Rectangle((0, 0), 1, 1)], alpha=0.2, label="CI Window", color="gray"
+        ),
     ]
 
-    ax.legend(handles=legend_elements, loc='upper left')
-    ax.set_title(f'Price Violations (Window Size: {window_size} days)')
-    ax.set_xlabel('Day')
-    ax.set_ylabel('Price')
+    ax.legend(handles=legend_elements, loc="upper left")
+    ax.set_title(f"Price Violations (Window Size: {window_size} days)")
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Price")
 
     return fig
+
 
 # Streamlit wrapper
 def st_plot_violations(prices, violations, window_size=5):
@@ -126,14 +138,17 @@ def st_plot_violations(prices, violations, window_size=5):
     st.pyplot(fig)
 
     # Add summary statistics
-    lower_vios = sum(1 for v in violations if v['price'] < v['lower'])
+    lower_vios = sum(1 for v in violations if v["price"] < v["lower"])
     upper_vios = len(violations) - lower_vios
 
     col1, col2 = st.columns(2)
     col1.metric("Lower Bound Violations", lower_vios)
     col2.metric("Upper Bound Violations", upper_vios)
 
-    st.write(f"Total violations: {len(violations)} ({len(violations)/len(prices):.1%} of days)")
+    st.write(
+        f"Total violations: {len(violations)} ({len(violations)/len(prices):.1%} of days)"
+    )
+
 
 # pca
 def show_pca_analysis():
@@ -164,12 +179,7 @@ def show_pca_analysis():
 
         with col2:
             st.write("**Component Statistics:**")
-            st.json(
-                results["stats"]
-                #'components': results['stats']['n_components'],
-                #'mean_loading': np.mean(results['stats']['component_loadings']),
-                #'total_variance': sum(results['stats']['explained_variance'])
-            )
+            st.json(results["stats"])
 
         figures = {
             "scree_plot": create_scree_plot(results["pca_model"]),
@@ -182,11 +192,6 @@ def show_pca_analysis():
         st.pyplot(figures["scree_plot"])
         st.pyplot(figures["cumulative_variance"])
 
-        # st.download_button(
-        #    label="Download PCA Results",
-        #    data=json.dumps(results['stats']),
-        #    file_name="pca_results.json"
-        # )
 
 def create_scree_plot(pca):
     """Create matplotlib figure for scree plot"""
@@ -210,6 +215,7 @@ def create_cumulative_variance_plot(cumulative_variance):
     ax.set_ylabel("Cumulative Explained Variance")
     return fig
 
+
 def verify_loglaplace(prices):
     """
     Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
@@ -227,20 +233,26 @@ def verify_loglaplace(prices):
     # log_ratios = ratios
 
     # Laplace tests
-    mean, variance = DIST.fit(log_ratios)
-    print(f"INFO - Fitted params {mean=} {variance=}")
+    args = DIST.fit(log_ratios)
+    print(f"INFO - Fitted params {args=}")
     ks_stat, p_value = kstest(log_ratios, DIST_NAME, args=DIST.fit(log_ratios))
 
     # Create plots
     fig_hist, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.hist(log_ratios, bins=math.ceil(math.sqrt(len(ratios))), density=True, alpha=0.6, label="Log Ratios")
+    ax1.hist(
+        log_ratios,
+        bins=math.ceil(math.sqrt(len(ratios))),
+        density=True,
+        alpha=0.6,
+        label="Log Ratios",
+    )
     x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
     ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label="Fitted Laplace")
     ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
     ax1.legend()
 
     fig_qq, ax2 = plt.subplots(figsize=(10, 4))
-    probplot(log_ratios, dist=DIST_NAME, plot=ax2)
+    probplot(log_ratios, dist=DIST, plot=ax2, sparams=args)
     ax2.set_title("Q-Q Plot of Log-Ratios")
     ax2.get_lines()[0].set_markerfacecolor("b")
     ax2.get_lines()[0].set_markersize(4.0)
@@ -249,71 +261,17 @@ def verify_loglaplace(prices):
 
     return {
         "ks_test": (ks_stat, p_value),
-        "mean": mean,
-        "std": variance,
+        "mean": args[0],
+        "std": args[1],
         "fig_hist": fig_hist,
         "fig_qq": fig_qq,
     }
 
 
-
-# ----------------------
-# Core Functions
-# ----------------------
-
-def _configure_algorithm(st, algorithms: list, msg="Select alorithm"):
-    algo_names = [fun.__name__ for fun in algorithms]
-
-    algorithm_name = st.sidebar.radio(msg, algo_names)
-    algorithm = lambda: None
-    for a in algorithms:
-        if a.__name__ == algorithm_name:
-            algorithm = a
-
-    params = get_algorithm_params(algorithm)
-    param_values = {}
-
-    st.sidebar.write(f"**Configure parameters for the {algorithm_name} algorithm:**")
-    st.sidebar.write(algorithm.__doc__)
-    param_config(st, params, param_values)
-
-    # We are overwriting the function default values
-    algorithm = functools.partial(algorithm, **param_values)
-
-    return algorithm
-
-
-
-def load_csv(uploaded_file):
-    """Load CSV file and preprocess."""
-    if uploaded_file:
-        # since we might have read it already
-        uploaded_file.seek(0)
-        st.session_state.file = uploaded_file
-        df = pd.read_csv(uploaded_file)
-        df = df.dropna()
-
-        valid_columns = ["Close", "Open", "Prices", "Price"]
-        for col in valid_columns:
-            if col in df.columns:
-                prices = df[col]
-                break
-        else:
-            print("WARNING - Could not determine price column")
-            prices = df.iloc[:, 0]  # Assume first column is price (bad assumption)
-
-        # NOTE With large samples, the model begins to deteriorate
-
-        st.session_state.df = prices
-        st.session_state.prices = prices.values
-
-        return st.session_state.prices
-    return None
-
 # ----------------------
 # Utility Functions
 # ----------------------
-def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
+def stock_price_ci(prices, days=5, alpha=0.05, n_sim=10000, start=0, end=None):
     """
     Constructs confidence intervals for future stock prices using loglaplace distribution properties.
 
@@ -330,53 +288,56 @@ def stock_price_ci(S0, mu, sigma, days=5, alpha=0.05, n_sim=10000):
     plt.Figure: Visualization of the price distribution
     """
     # Analytical method (loglaplace distribution)
-    # NOTE More research is needed since the sum of exp distributes
-    # Variance?-Gamma.
-    #_, lower_boot, upper_boot = boot_ci(S0, mu, sigma, days, alpha, n_sim)
-    _, lower_boot, upper_boot = (np.array([0.0]), 0.0, 0.0)
+    # nashi
+    if end is None:
+        end = len(prices) - 1
 
     # MC
-    future_prices, lower_mc, upper_mc = mc_ci(S0, mu, sigma, days, alpha, n_sim)
-    #_, lower_mc, upper_mc = (np.array([0.0]), 0.0, 0.0)
+    future_prices, lower_mc, upper_mc = mc_ci(prices, start, end, days, alpha, n_sim)
 
     return {
-        "current_price": S0,
+        "current_price": prices[end],
         "days_ahead": days,
         "confidence_level": 1 - alpha,
         "future_prices": future_prices,
         "monte_carlo_ci": (lower_mc, upper_mc),
-        "bootstrapping_ci": (lower_boot, upper_boot),
         "ci": (lower_mc, upper_mc),
-        #"ci": (lower_boot, upper_boot),
     }
 
 
 # ----------------------
 # Evaluation Functions
 # ----------------------
-def process_window(i, prices, window_size, alpha, mu, sigma, n_sim):
+def process_window(prices, start, end, window_size, alpha, n_sim):
     """Process single window and return violation if exists"""
-    S0 = prices[i]
-    current_window = prices[i:i + window_size + 1]
-    
+    current_window = prices[end : end + window_size + 1] # included
+
     # Get confidence interval
-    res = stock_price_ci(S0, mu, sigma, days=window_size, alpha=alpha, n_sim=n_sim)
+    res = stock_price_ci(
+        prices, days=window_size, alpha=alpha, n_sim=n_sim, start=start, end=end
+    )
     lower, upper = res["ci"]
-    
+
     # Check window
     for price in current_window[1:]:
         if not (lower <= price and price <= upper):
             return {
-                "day": i,
+                "day": end,
                 "price": price,
                 "lower": lower,
                 "upper": upper,
-                "window": window_size
+                "window": window_size,
             }
     return None
 
+
 def validate_ci_coverage(
-    prices, mu, sigma, window_size=5, alpha=0.05, n_sim=1000
+    prices,
+    window_size=5,
+    alpha=0.05,
+    n_sim=1000,
+    dynamic_estimation=False,
+    lookback_days=0,
 ):
     """
     Validates CI coverage by checking how often prices stay within predicted intervals.
@@ -396,8 +357,23 @@ def validate_ci_coverage(
     violations = []
     ci_widths = []
 
-    for i in tqdm(range(len(prices) - window_size)):
-        violation = process_window(i, prices, window_size, alpha, mu, sigma, n_sim)
+    start = 0
+    if dynamic_estimation:
+        start = lookback_days
+
+    for i in tqdm(range(start, len(prices) - window_size)):
+        if dynamic_estimation:
+            violation = process_window(
+                prices,
+                i - lookback_days,
+                i,
+                window_size,
+                alpha,
+                n_sim,
+            )
+        else:
+            violation = process_window(prices, 0, i, window_size, alpha, n_sim)
+
         if violation:
             violations.append(violation)
         total += 1
@@ -580,11 +556,10 @@ def enhanced_evaluation(net_worth, actions, prices):
 
 
 # Example usage in Streamlit app
-def policy_validation_page(logs, prices):
+def policy_validation_page(logs, prices, window=5):
     st.title("Policy validation")
 
     with st.expander("Signal analysis", expanded=True):
-        window = 30
 
         plot_predictions_vs_outcomes(prices, logs["action"], window)
 
@@ -642,7 +617,13 @@ def main():
     st.sidebar.header("Navigation")
     section = st.sidebar.radio(
         "Go to",
-        ["CSV Validation", "CI Evaluation", "Policy Experimentation", "Agents", "Utils"],
+        [
+            "CSV Validation",
+            "CI Evaluation",
+            "Policy Experimentation",
+            "Agents",
+            "Utils",
+        ],
     )
 
     if section == "CSV Validation":
@@ -660,10 +641,11 @@ def main():
         if st.button("Estimate parameters"):
             uploaded_file = open(filename)
             prices = load_csv(uploaded_file)
+            st.session_state.prices = prices
 
             uploaded_file.close()
 
-            price_sample = st.session_state.prices
+            price_sample = prices
             if resampling:
                 start = random.randint(0, max(0, len(price_sample) - (size + 1)))
                 end = min(start + size, len(price_sample))
@@ -675,7 +657,9 @@ def main():
             st.session_state.prices = price_sample
 
             with st.expander("Step 1: Estimate Parameters", expanded=True):
-                mu_hat, sigma_hat = estimate_parameters(price_sample)
+                args = estimate_parameters(price_sample)
+                mu_hat = args[0]
+                sigma_hat = args[1]
                 st.markdown(
                     f"""
                 **Estimated Parameters for n={len(price_sample)}**:
@@ -716,6 +700,11 @@ def main():
             S0 = st.number_input("Initial Price (S₀)", value=100.0)
             T = st.number_input("Days (T)", value=5)
             aleph = st.number_input("Error (alpha)", value=0.1)
+            dynamic_estimation = st.checkbox(
+                "Dynamic estimation (moving median)", False
+            )
+            plot_graph = st.checkbox("Plot graph", False)
+
         with col2:
             mu = st.number_input(
                 "Drift (μ)",
@@ -734,20 +723,18 @@ def main():
             st.session_state.sigma_hat = sigma
 
             num_paths = st.number_input("Paths", value=1000)
+            lookback_days = st.number_input("Lookback days", value=240)
 
         if st.button("Run CI Simulation"):
+            prices = st.session_state.prices
             if "prices" in st.session_state and st.session_state.prices is not None:
-                res = stock_price_ci(S0, mu, sigma, T, aleph, num_paths)
+                res = stock_price_ci(prices, T, aleph, num_paths)
 
                 confidence = res["confidence_level"]
 
                 mc_low, mc_high = res["monte_carlo_ci"]
                 mc_low = round(float(mc_low), 2)
                 mc_high = round(float(mc_high), 2)
-
-                boot_low, boot_high = res["bootstrapping_ci"]
-                boot_low = round(float(boot_low), 2)
-                boot_high = round(float(boot_high), 2)
 
                 # Visualization
                 fig, ax = plt.subplots(figsize=(10, 6))
@@ -767,7 +754,6 @@ def main():
                     **Expected interval**:  
                     - Confidence = {confidence}  
                     - lower, upper (M-C) = {mc_low, mc_high}
-                    - lower, upper (B) = {boot_low, boot_high}
                     """
                     )
 
@@ -775,11 +761,11 @@ def main():
             prices = st.session_state.prices
             res, fig = validate_ci_coverage(
                 prices,
-                mu,
-                sigma,
                 window_size=T,
                 alpha=aleph,
                 n_sim=num_paths,
+                dynamic_estimation=dynamic_estimation,
+                lookback_days=lookback_days,
             )
 
             with st.expander("Expectation VS Reality", expanded=True):
@@ -812,21 +798,25 @@ def main():
                 violations = [{"day": 0, "lower": 0, "upper": 0, "price": 0}]
             clusters = find_clusters(violations)
 
-            big = len(max(clusters, key=len))
-            small = len(min(clusters, key=len))
+            if clusters:
+                big = len(max(clusters, key=len))
+                small = len(min(clusters, key=len))
+            else:
+                big = 0
+                small = 0
 
             st.markdown(
                 f"""
                 **Volatility clusters**
                 - biggest: {big}
                 - smallest: {small}
-                - median: {(big + small)/2}
                 - mean: {sum(map(len, clusters))/len(clusters):.2f}
                 - clustered: {sum(map(len, clusters))/len(violations)*100:.2f}%
                 """
             )
 
-            st_plot_violations(prices, violations)
+            if plot_graph:
+                st_plot_violations(prices, violations)
 
     elif section == "Policy Experimentation":
         prices = st.session_state.prices
@@ -840,7 +830,8 @@ def main():
             min_value=0,
             max_value=len(prices),
         )
-        days = st.multiselect("CI Days", [i for i in range(2, 31)], default=[5, 10, 30])
+        days = st.multiselect("CI Days", [i for i in range(1, 31)], default=[5, 10, 30])
+        days_to_verify = st.number_input("Days to verify", value=5, min_value=1)
         risk = st.number_input("Risk", value=risk_val)
 
         mu = st.session_state.mu_hat
@@ -857,7 +848,8 @@ def main():
         start_state = policy.STATE.copy()
 
         best_risk = risk
-        res = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+        history = st.session_state.history
+        res = selected_policy(prices, len(prices) - 1, best_risk, history)
         forecast = res["action"]
         if forecast > 0:
             forecast = "BUY"
@@ -882,8 +874,9 @@ def main():
                 handle_action=handle_action,
             )
             _show_policy(start_state, state, logs, prices)
+            st.session_state.history = logs["action"]
 
-            policy_validation_page(logs, prices)
+            policy_validation_page(logs, prices, days_to_verify)
 
         if st.button("Calculate best alpha and run"):
             worker = functools.partial(
@@ -930,13 +923,13 @@ def main():
             worst.sort(
                 key=lambda v: policy._net_worth(prices, v[0])
                 + 3 * min(v[1]["net_worth"]),
-            ) # best in reverse reverse order
+            )  # best in reverse reverse order
 
             best_fit = results[:3]
             worst_case = worst[:3]
 
             best_risk = best_fit[0][0]["risk"]
-            res = selected_policy(prices, len(prices) - 1, mu, sigma, best_risk)
+            res = selected_policy(prices, len(prices) - 1, best_risk)
             forecast = res["action"]
             if forecast > 0:
                 forecast = "BUY"
@@ -964,7 +957,7 @@ def main():
 
             st.markdown("**Confidence intervals**")
             for d in days:
-                res = stock_price_ci(prices[-1], mu, sigma, d, risk, 1000)
+                res = stock_price_ci(prices, d, risk, 1000)
 
                 confidence = res["confidence_level"]
 
@@ -981,7 +974,7 @@ def main():
                     """
                     )
 
-            res = stock_price_ci(prices[-1], mu, sigma, days[-1], best_risk, 1000)
+            res = stock_price_ci(prices, days[-1], best_risk, 1000)
 
             confidence = res["confidence_level"]
 
@@ -999,7 +992,7 @@ def main():
                 )
 
     elif section == "Agents":
-       pass 
+        pass
     elif section == "Utils":
         st.markdown(
             f"""
@@ -1016,8 +1009,9 @@ def main():
         sigma = st.session_state.sigma_hat
 
         if st.button("Generate Prices"):
-            prices = simulate_prices(S0, mu, sigma, T, 1)
-            df = pd.DataFrame({"Close": prices[0]})
+            prices = st.session_state.prices
+            sim_prices = simulate_prices(S0, len(prices) - 1, T, 1)
+            df = pd.DataFrame({"Close": sim_prices[0]})
 
             num = 0
             file_fmt = "Downloads/gen{num}.csv"
@@ -1032,9 +1026,8 @@ def main():
 
 if __name__ == "__main__":
     if "prices" not in st.session_state:
-        st.session_state.df = None
         st.session_state.prices = None
-        st.session_state.file = None
+        st.session_state.history = []
         st.session_state.mu_hat = 0
         st.session_state.sigma_hat = 1
     main()

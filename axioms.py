@@ -8,6 +8,8 @@ from utils import estimate_parameters, simulate_prices, mc_ci
 from main import load_csv
 from scipy.stats import chi2_contingency
 
+from meta import _configure_algorithm
+
 DB_DIR = Path("./datasets")
 
 # Core functional components
@@ -36,56 +38,94 @@ def generate_datasets(real_prices: list, n_sim=1000):
     return synthetic, mixed
 
 
-def _make_samples(prices_list: list, test_size=31):
-    """
-    Returns two chunks. One for testing and another for validation.
-    The second one is slightly largers. This can be used to evaluate the predictive
-    ability of the model.
-    """
-    test = []
-    validation = []
-    for prices in prices_list:
-        prices_len = len(prices)
-        start = random.randint(0, prices_len - 500)
-        end = random.randint(start + 240, prices_len - test_size)
-
-        test.append(prices[start:end])
-        validation.append(prices[start:end + test_size])
-
-    return test, validation
-
-
 # mu
-def infer_trend(trend_vector):
-    positive = [1] * len(trend_vector)
-    negative = [-1] * len(trend_vector)
+def trend_mu(prices, power=0.0, days=15):
+    """
+    Use the moving median (mu parameter of the laplace)
+    to deduce where is the price moving towards.
 
-    if trend_vector == positive:
-        return 1
-    #elif trend_vector == negative:
-    #    return -1
+    The `days` parameter represents the number of days to lookback
+    to estimate parameters. The default is the best value found for 5 days, 15 days.
+    """
+    # last "days" days
+    mu, sigma = estimate_parameters(prices[-days:])
+
+    if abs(mu) < power:
+        return 0
+    else:
+        return 1 if mu > 0 else -1
+
+
+def trend_mu(prices):
+    mu_1, _ = estimate_parameters(prices[-7:])
+    mu_2, _ = estimate_parameters(prices[-15:])
+    mu_3, _ = estimate_parameters(prices[-27:])
+    mu_4, _ = estimate_parameters(prices[-37:])
+
+    # if np.sign(mu_1) == np.sign(mu_2) and np.sign(mu_2) == np.sign(mu_3) and np.sign(mu_1) != np.sign(mu_2):
+    #    return -np.sign(mu_2)
+    if np.sign(mu_1) == np.sign(mu_2):
+        return -np.sign(mu_2)
     return 0
 
+
+def trend_rev_mu(prices, power=0.01, variance=0.02, days=15):
+    """
+    Aimed to detect the start of the trend instead of its strength
+    """
+    mu, sigma = estimate_parameters(prices[-days:])
+
+    if abs(mu) > power or variance < variance:
+        return 0
+    else:
+        return 1 if mu > 0 else -1
+
+
+def trend_threshold(prices, risk, window_size=10, before_window=True, days=15):
+    """
+    1. Calculate 10-day moving average
+    2. See if it's (almost) outside bounds given an alhpa
+
+    The size of the window and wheter to check before or after can be configured.
+    """
+    location, scale = estimate_parameters(prices[-days:])
+    window = sum(prices[index - window_size : index]) / window_size
+
+    S0 = prices[index - window_size * before_window]  # True/False are integers
+
+    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
+
+    A = lower_mc
+    B = higher_mc
+    C = window
+    result = (C - A) / (B - A)
+
+    action = WAIT
+
+    if result > 0.9:
+        action = SELL
+    elif result < 0.1:
+        action = BUY
+
+
 # buy and hold
-def infer_trend(trend_vector):
+def trend_hodl(prices):
+    """
+    Simply buy the asset at any given opportunity.
+    Works with some categories of assets.
+    """
     return 1
 
-def infer_trend(trend_vector):
+
+def trend_monkey(prices):
+    """
+    Gives a random answer. $E[x] = 0$ or, in this case
+    the precision should be `50%`.
+    """
     return random.choice([-1, 1])
 
-def detect_trends(prices_list, window_sizes):
-    """Core trend detection algorithm"""
-    trends = []
-    for prices in prices_list:
-        trend_vector = [0] * len(window_sizes)
-        parameter_vector = []
-        for i, ws in enumerate(window_sizes):
-            mu, sigma = estimate_parameters(prices[-ws:])
-            parameter_vector.append(mu)
 
-            trend_vector[i] = np.sign(mu)
-        trends.append(infer_trend(trend_vector))
-    return trends
+TREND = [trend_mu, trend_rev_mu, trend_hodl, trend_monkey]
 
 
 def validate_trends(test, validation, trends):
@@ -103,9 +143,31 @@ def validate_trends(test, validation, trends):
     return len(validation), guesses, failures
 
 
-def show_trends_with_metrics(prices: list, window_sizes: list):
-    test, validation = _make_samples(prices, 200)
-    trends = detect_trends(test, window_sizes)
+def _make_samples(
+    prices_list: list,
+    test_size=31,
+):
+    """
+    Returns two chunks. One for testing and another for validation.
+    The second one is slightly largers. This can be used to evaluate the predictive
+    ability of the model.
+    """
+    test = []
+    validation = []
+    for prices in prices_list:
+        prices_len = len(prices)
+        start = random.randint(0, prices_len - 500)
+        end = random.randint(start + 240, prices_len - test_size)
+
+        test.append(prices[start:end])
+        validation.append(prices[start : end + test_size])
+
+    return test, validation
+
+
+def show_trends_with_metrics(prices: list, trend_detection_algo, lookahead=5):
+    test, validation = _make_samples(prices, lookahead)
+    trends = [trend_detection_algo(p) for p in test]
     metrics = validate_trends(test, validation, trends)
 
     change = []
@@ -137,21 +199,19 @@ def main():
             real_prices.append(load_csv(f))
 
     # Configuration
-    window_sizes = st.sidebar.multiselect(
-        "Window sizes",
-        [480, 240, 120, 60, 30],
-        default=[
-            240,
-        ],
-    )
     n_runs = st.sidebar.number_input("Number of runs", 1, 10000, 10)
+    lookahead = st.sidebar.number_input("Days ahead to verify", 5, 1000, 5)
+
+    detect_trend = _configure_algorithm(st, TREND, "Trend-detection algorithm")
 
     if st.button("Run Experiments"):
-        results = validate_trend_hyphotesis(real_prices, window_sizes, n_runs)
+        results = validate_trend_hyphotesis(
+            real_prices, n_runs, lookahead, detect_trend
+        )
         display_final_results(results, n_runs)
 
 
-def validate_trend_hyphotesis(real_prices, window_sizes, n_runs):
+def validate_trend_hyphotesis(real_prices, n_runs, lookahead, trend_detection_algo):
     """Run multiple experiments and aggregate results"""
     # Initialize accumulators
     agg_metrics = {
@@ -172,9 +232,9 @@ def validate_trend_hyphotesis(real_prices, window_sizes, n_runs):
         )
 
         # Calculate metrics
-        r = show_trends_with_metrics(real_prices, window_sizes)
-        s = show_trends_with_metrics(synthetic, window_sizes)
-        m = show_trends_with_metrics(mixed, window_sizes)
+        r = show_trends_with_metrics(real_prices, trend_detection_algo, lookahead)
+        s = show_trends_with_metrics(synthetic, trend_detection_algo, lookahead)
+        m = show_trends_with_metrics(mixed, trend_detection_algo, lookahead)
 
         # Accumulate results
         for key in ["total", "guesses", "failures"]:
@@ -222,11 +282,19 @@ def display_final_results(results, n_runs):
 
     change = [np.sign(c) for c in change]
 
-    less_c = sum(1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] == change[i])
-    less_i = sum(1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] != change[i])
+    less_c = sum(
+        1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] == change[i]
+    )
+    less_i = sum(
+        1 for i in range(len(change)) if lap_mu[i] == -1 and lap_mu[i] != change[i]
+    )
 
-    more_c = sum(1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] == change[i])
-    more_i = sum(1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] != change[i])
+    more_c = sum(
+        1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] == change[i]
+    )
+    more_i = sum(
+        1 for i in range(len(change)) if lap_mu[i] == 1 and lap_mu[i] != change[i]
+    )
 
     print(f"{less_c=} {less_i=} {more_c=} {more_i=}")
 

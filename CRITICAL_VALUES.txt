@@ -1,0 +1,9 @@
+# 5-day
+- alpha=0.80: 7-days
+- alpha=0.66: 15-days
+- alpha=0.50: 27-days
+- alhpa=0.33: 37-days
+- alpha=0.20: 45-days
+
+# 10-day
+- alpha=66: 15-days
