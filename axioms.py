@@ -9,8 +9,7 @@ from main import load_csv
 from scipy.stats import chi2_contingency
 
 from meta import _configure_algorithm
-
-DB_DIR = Path("./datasets")
+from utils import DB_DIR
 
 # Core functional components
 def generate_datasets(real_prices: list, n_sim=1000):
@@ -143,7 +142,7 @@ def validate_trends(test, validation, trends):
     return len(validation), guesses, failures
 
 
-def _make_samples(
+def make_samples(
     prices_list: list,
     test_size=31,
 ):
@@ -165,8 +164,14 @@ def _make_samples(
     return test, validation
 
 
+def make_sample(prices_list):
+    prices_len = len(prices)
+    start = random.randint(0, prices_len - 500)
+    end = random.randint(start + 240, prices_len - test_size)
+
+
 def show_trends_with_metrics(prices: list, trend_detection_algo, lookahead=5):
-    test, validation = _make_samples(prices, lookahead)
+    test, validation = make_samples(prices, lookahead)
     trends = [trend_detection_algo(p) for p in test]
     metrics = validate_trends(test, validation, trends)
 

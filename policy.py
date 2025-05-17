@@ -37,9 +37,7 @@ def _extract_logs(logs: dict, log: dict):
 
 
 # policies
-def policy_threshold(
-    prices, index, risk, history, window_size=10, before_window=True
-):
+def policy_threshold(prices, index, risk, history, window_size=10, before_window=True):
     """
     1. Calculate 10-day moving average
     2. See if it's (almost) outside bounds given an alhpa
@@ -81,10 +79,10 @@ def policy_rsi(
     index,
     risk,
     history,
-    days=14,
-    overbought=70,
+    days=10,
+    overbought=90,
     oversold=30,
-    risk_adjusted_thresholds=True,
+    risk_adjusted_thresholds=False,
 ):
     """RSI-based trading policy with risk-adjusted thresholds
 
@@ -169,9 +167,7 @@ def _adjust_thresholds(risk, base_overbought, base_oversold):
     return (min(max(adjusted_ob, 60), 90), max(min(adjusted_os, 40), 10))
 
 
-def policy_med(
-    prices, index, risk, history, window_size=10, before_window=True
-):
+def policy_med(prices, index, risk, history, window_size=10, before_window=True):
     """
     1. Calculate 10-day moving average
     2. See if it's (almost) outside bounds given an alhpa
@@ -265,7 +261,7 @@ def general_policy(
     handle_action,
     orders=True,
     concurrent_orders=False,
-    auto_close=5,
+    auto_close=7,
     reverse_strategy=False,
     memoryless=False,
     apply_order=True,

@@ -103,7 +103,7 @@ class BinanceSource(DataSource):
         params = {
             "symbol": symbol,
             "interval": "1d",
-            "startTime": int(start_date.timestamp()) * 1000,
+            "startTime": int(start_date.timestamp() - 1) * 1000,
         }
         response = requests.get("https://api.binance.com/api/v3/klines", params=params)
         data = response.json()

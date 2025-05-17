@@ -1,7 +1,19 @@
+from pathlib import Path
 import functools
 import inspect
 
+from scipy.stats import laplace, gennorm
+
 import pandas as pd
+
+DIST = gennorm
+#DIST = laplace
+DIST_NAME = "gennorm"
+#DIST_NAME = "laplace"
+
+BASE_DIR = Path(__file__).parent
+
+DB_DIR = BASE_DIR / "datasets"
 
 # comfy
 def get_algorithm_params(func):

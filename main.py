@@ -31,23 +31,29 @@ from utils import (
     # stats
     estimate_parameters,
     simulate_prices,
+    stock_price_ci,
     mc_ci,
+    process_window,
     # pca
     general_pca,
     # autocorr
     find_clusters,
-    DIST,
-    DIST_NAME,
 )
 from meta import (
     load_csv,
     _configure_algorithm,
+    DB_DIR,
+    DIST,
+    DIST_NAME,
 )
 
-DB_DIR = Path("./datasets")
+from agent import (
+    core,
+    gene,
+)
 
 
-def plot_violations(prices, violations, window_size=5):
+def plot_violations(prices, violations, window_size=7):
     """
     Plot price series with violation regions highlighted
 
@@ -133,7 +139,7 @@ def plot_violations(prices, violations, window_size=5):
 
 
 # Streamlit wrapper
-def st_plot_violations(prices, violations, window_size=5):
+def st_plot_violations(prices, violations, window_size=7):
     fig = plot_violations(prices, violations, window_size)
     st.pyplot(fig)
 
@@ -269,71 +275,11 @@ def verify_loglaplace(prices):
 
 
 # ----------------------
-# Utility Functions
-# ----------------------
-def stock_price_ci(prices, days=5, alpha=0.05, n_sim=10000, start=0, end=None):
-    """
-    Constructs confidence intervals for future stock prices using loglaplace distribution properties.
-
-    Parameters:
-    S0 (float): Current stock price
-    mu (float): location of the Laplace
-    sigma (float): scale
-    days (int): Time horizon in days
-    alpha (float): Error (default 0.05 for 95% CI)
-    n_sim (int): Number of simulations for Monte Carlo approach (only approach for now)
-
-    Returns:
-    dict: Contains confidence intervals and other statistics
-    plt.Figure: Visualization of the price distribution
-    """
-    # Analytical method (loglaplace distribution)
-    # nashi
-    if end is None:
-        end = len(prices) - 1
-
-    # MC
-    future_prices, lower_mc, upper_mc = mc_ci(prices, start, end, days, alpha, n_sim)
-
-    return {
-        "current_price": prices[end],
-        "days_ahead": days,
-        "confidence_level": 1 - alpha,
-        "future_prices": future_prices,
-        "monte_carlo_ci": (lower_mc, upper_mc),
-        "ci": (lower_mc, upper_mc),
-    }
-
-
-# ----------------------
 # Evaluation Functions
 # ----------------------
-def process_window(prices, start, end, window_size, alpha, n_sim):
-    """Process single window and return violation if exists"""
-    current_window = prices[end : end + window_size + 1] # included
-
-    # Get confidence interval
-    res = stock_price_ci(
-        prices, days=window_size, alpha=alpha, n_sim=n_sim, start=start, end=end
-    )
-    lower, upper = res["ci"]
-
-    # Check window
-    for price in current_window[1:]:
-        if not (lower <= price and price <= upper):
-            return {
-                "day": end,
-                "price": price,
-                "lower": lower,
-                "upper": upper,
-                "window": window_size,
-            }
-    return None
-
-
 def validate_ci_coverage(
     prices,
-    window_size=5,
+    window_size=7,
     alpha=0.05,
     n_sim=1000,
     dynamic_estimation=False,
@@ -450,7 +396,7 @@ def plot_predictions_vs_outcomes(prices, actions, window=3):
     st.pyplot(fig)
 
 
-def calculate_policy_metrics(prices, actions, window=5):
+def calculate_policy_metrics(prices, actions, window=7):
     """
     Calculates key performance metrics:
     1. Signal Accuracy: % of correct directional predictions
@@ -556,7 +502,7 @@ def enhanced_evaluation(net_worth, actions, prices):
 
 
 # Example usage in Streamlit app
-def policy_validation_page(logs, prices, window=5):
+def policy_validation_page(logs, prices, window=7):
     st.title("Policy validation")
 
     with st.expander("Signal analysis", expanded=True):
@@ -572,6 +518,160 @@ def policy_validation_page(logs, prices, window=5):
 # ----------------------
 # Streamlit App
 # ----------------------
+
+
+def agents_section():
+    st.header("🤖 Agent Evolution Simulation")
+
+    with st.expander("**Gene template guide**", expanded=False):
+        st.json(gene.PARAM_SPACE)
+
+    # Section 1: Simulation Parameters
+    with st.expander("⚙️ Simulation Configuration", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            init_agents = st.number_input("Initial Agents", 1, 1000, 1)
+            init_cash = st.number_input("Starting Cash", 100, 1_000_000, 100)
+            iter_num = st.number_input("Skip number", 10, 1000, 100)
+        with col2:
+            elite_threshold = st.slider(
+                "Elite Threshold",
+                1,
+                100,
+                20,
+                help="Percentage of top performers to keep",
+            )
+            mutation_rate = st.slider("Mutation Rate", 0.0, 1.0, 0.05)
+        with col3:
+            max_generations = st.number_input("Max Generations", 1, 1000, 300)
+            stop_condition = st.selectbox(
+                "Stop Condition", ["Population Size", "Generations"]
+            )
+
+    # Section 2: Population Initialization
+    if "manager" not in st.session_state:
+        if st.button("🧬 Generate Initial Population"):
+            st.session_state.manager = core.generate_population_manager(
+                size=init_agents,
+                state_size=len(core._get_state(*core._select_dataset())),
+                initial_cash=init_cash,
+            )
+            st.session_state.logs = []
+            st.success(f"Created {init_agents} agents with ${init_cash:,.2f} each")
+
+    # Section 3: Simulation Controls
+    if "manager" in st.session_state:
+        current_gen = len(st.session_state.logs)
+        control_cols = st.columns([1, 1, 1, 2])
+        with control_cols[0]:
+            if st.button("⏩ Step Forward"):
+                log = core.simulation(st.session_state.manager, current_gen)
+                st.session_state.logs.append(log)
+
+        with control_cols[1]:
+            if st.button(f"⏩⏩ {iter_num} Steps"):
+                progress = st.progress(0)
+                for i in range(iter_num):
+                    if (len(st.session_state.manager.agents) / init_agents) <= (
+                        elite_threshold / 100
+                    ):
+                        break
+                    log = core.simulation(st.session_state.manager, current_gen)
+                    st.session_state.logs.append(log)
+                    current_gen += 1
+                    progress.progress(i / iter_num)
+
+        with control_cols[2]:
+            if st.button("🏃♂️ Run Full Simulation"):
+                progress = st.progress(0)
+                current_gen = len(st.session_state.logs)
+
+                while (
+                    current_gen < max_generations
+                    and len(st.session_state.manager.agents) > 2
+                ):
+                    log = core.simulation(st.session_state.manager, current_gen)
+                    st.session_state.logs.append(log)
+                    current_gen += 1
+                    progress.progress(current_gen / max_generations)
+        if st.button("Cross"):
+            agents = st.session_state.manager.agents
+            children = gene.biased_crossover(agents, init_agents, init_cash)
+            for child in children:
+                st.session_state.manager.report(child)
+
+        # Section 4: Visualization
+        st.subheader("📈 Population Dynamics")
+
+        # Real-time metrics
+        metric_cols = st.columns(3)
+        with metric_cols[0]:
+            st.metric("Current Population", len(st.session_state.manager.agents))
+        with metric_cols[1]:
+            avg_money = st.session_state.manager.avg_wealth()
+
+            st.metric("Average Capital", f"${avg_money:,.2f}")
+        with metric_cols[2]:
+            st.metric("Generation", len(st.session_state.logs))
+
+        # Evolution history plot
+        fig, ax1 = plt.subplots()
+        ax2 = ax1.twinx()
+
+        gens = [log["generation"] for log in st.session_state.logs]
+        pop = [log["population"] for log in st.session_state.logs]
+        wealth = [log["avg_wealth"] for log in st.session_state.logs]
+
+        ax1.plot(gens, pop, "b-", label="Population")
+        ax2.plot(gens, wealth, "r-", label="Wealth")
+        ax1.set_xlabel("Generation")
+        ax1.set_ylabel("Population", color="b")
+        ax2.set_ylabel("Average Wealth", color="r")
+        st.pyplot(fig)
+
+        # Elite agent inspection
+        st.subheader("🏆 Top Performers")
+        top_agents = sorted(
+            st.session_state.manager.agents,
+            key=lambda x: x.money,
+            reverse=True,
+        )[:5]
+
+        for i, agent in enumerate(top_agents):
+            with st.expander(f"{agent.name} - ${agent.money:,.2f}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Genes**")
+                    st.json(tuple(agent.brain.dna))
+                with col2:
+                    st.write("**Trading Stats**")
+                    if st.session_state.manager.personnel[agent]:
+                        earnings = np.array(
+                            list(
+                                map(
+                                    lambda a: a["evaluation"],
+                                    st.session_state.manager.personnel[agent].values(),
+                                )
+                            )
+                        )
+                        st.metric(
+                            "Success Rate",
+                            f"{np.flatnonzero(earnings > 0).size/earnings.size:.2%}",
+                        )
+                        st.metric("Average Earnings", f"{earnings.mean():.2}")
+                        st.metric("STDev Earnings", f"{earnings.std():.2}")
+                        st.metric("Min Earnings", f"{earnings.min():.2}")
+                        st.metric("Max Earnings", f"{earnings.max():.2}")
+
+        # Gene statistics
+        st.subheader("🧬 Population Gene Distribution")
+        gene_df = pd.DataFrame(
+            [agent.brain.dna for agent in st.session_state.manager.personnel]
+        )
+        st.dataframe(gene_df.describe())
+
+    else:
+        st.warning("Initialize population first!")
 
 
 def _show_policy(start_state, state, logs, prices):
@@ -698,7 +798,7 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             S0 = st.number_input("Initial Price (S₀)", value=100.0)
-            T = st.number_input("Days (T)", value=5)
+            T = st.number_input("Days (T)", value=7)
             aleph = st.number_input("Error (alpha)", value=0.1)
             dynamic_estimation = st.checkbox(
                 "Dynamic estimation (moving median)", False
@@ -719,16 +819,19 @@ def main():
                 format="%0.5f",
             )
 
-            st.session_state.mu_hat = mu
-            st.session_state.sigma_hat = sigma
-
             num_paths = st.number_input("Paths", value=1000)
             lookback_days = st.number_input("Lookback days", value=240)
+
+            st.session_state.mu_hat = mu
+            st.session_state.sigma_hat = sigma
 
         if st.button("Run CI Simulation"):
             prices = st.session_state.prices
             if "prices" in st.session_state and st.session_state.prices is not None:
-                res = stock_price_ci(prices, T, aleph, num_paths)
+                if not dynamic_estimation:
+                    res = stock_price_ci(prices, T, aleph, num_paths)
+                else:
+                    res = stock_price_ci(prices[-lookback_days:], T, aleph, num_paths)
 
                 confidence = res["confidence_level"]
 
@@ -831,7 +934,7 @@ def main():
             max_value=len(prices),
         )
         days = st.multiselect("CI Days", [i for i in range(1, 31)], default=[5, 10, 30])
-        days_to_verify = st.number_input("Days to verify", value=5, min_value=1)
+        days_to_verify = st.number_input("Days to verify", value=7, min_value=1)
         risk = st.number_input("Risk", value=risk_val)
 
         mu = st.session_state.mu_hat
@@ -929,7 +1032,7 @@ def main():
             worst_case = worst[:3]
 
             best_risk = best_fit[0][0]["risk"]
-            res = selected_policy(prices, len(prices) - 1, best_risk)
+            res = selected_policy(prices, len(prices) - 1, best_risk, history)
             forecast = res["action"]
             if forecast > 0:
                 forecast = "BUY"
@@ -992,7 +1095,7 @@ def main():
                 )
 
     elif section == "Agents":
-        pass
+        agents_section()
     elif section == "Utils":
         st.markdown(
             f"""
@@ -1028,6 +1131,7 @@ if __name__ == "__main__":
     if "prices" not in st.session_state:
         st.session_state.prices = None
         st.session_state.history = []
+
         st.session_state.mu_hat = 0
         st.session_state.sigma_hat = 1
     main()
