@@ -1,33 +1,64 @@
+from pathlib import Path
+import pickle
 import random
 import numpy as np
 
 from meta import load_csv, DB_DIR
-from utils import get_log_ratios
+from utils import get_log_ratios, calculate_rsi
 from agent.brain import Brain
 from agent.evaluate import fitness, evaluate
 from agent.gene import _random_gene
 from agent.names import historical_figures
+from agent.config import EVAL_WINDOW
 
-EVAL_WINDOW = 5
+MODEL_PATH = "/tmp/{name}.pickle"
+
+
+def save_object(obj, path=None):
+    path = path or Path(MODEL_PATH.format(name=obj.__class__.__name__.lower()))
+
+    with open(path, "wb") as file:
+        pickle.dump(obj, file)
+    return obj
+
+
+def load_object(cls_name, path=None):
+    path = path or Path(MODEL_PATH.format(name=cls_name.lower()))
+
+    with open(path, "rb") as file:
+        obj = pickle.load(file)
+    return obj
+
+
+def load_agent(path=MODEL_PATH):
+    return load_object("Agent")
+
+
+def save_agent(agent, path=MODEL_PATH):
+    return save_object(agent)
 
 
 class Agent:
-    def __init__(self, brain, init_money=100):
+    def __init__(self, brain=None, init_money=100, dataset=None, index=None):
         self.name = random.choice(historical_figures)
-        self.brain = brain
-        self.brain.agent = self
 
         self.money = init_money
 
-        dataset, index = _select_dataset()
+        if dataset is None or index is None:
+            # no use-case for this
+            if dataset or index:
+                print("WARNING - Generating automatic index and dataset for agent")
+            dataset, index = _select_dataset()
 
         self.dataset = dataset
         self.index = index
 
         self.manager = None
+        self.brain = brain or Brain(_random_gene(), len(_get_state(dataset, index)))
+        self.brain.agent = self
 
-    def decide(self, environment: "np.array"):
-        return self.brain.decide(environment)
+    def decide(self, information: "np.array"):
+        return self.brain.decide(information)
 
     def remember(self, action):
         return self.manager.remember(self, action)
@@ -88,8 +119,9 @@ class Manager:
 
         act = action_signature in self.personnel[agent]
         if act:
+            metadata = self.personnel[agent][action_signature]
             cum = self.personnel[agent][action_signature]["cum"] = (
-                act["evaluation"] + evaluation
+                metadata["evaluation"] + evaluation
             )
             self.personnel[agent][action_signature]["count"] += 1
             cnt = self.personnel[agent][action_signature]["count"]
@@ -160,7 +192,10 @@ def _select_dataset():
     return real_prices, start
 
 
-def _get_state(dataset, index) -> "np.array":
+def _get_prices(dataset, index, days=EVAL_WINDOW):
+    """
+    Returns a numpy array with the prices for the last `days` days.
+    """
     start, end = max(0, index - (EVAL_WINDOW * 2 + 1)), index
 
     rt = get_log_ratios(dataset[start:end])
@@ -168,8 +203,23 @@ def _get_state(dataset, index) -> "np.array":
 
     return res
 
+def _get_rsi(dataset, index, days=None):
+    days = days or []
+    return np.array([
+        calculate_rsi(dataset, index, period=day)
+     for day in days
+    ])
 
-def simulation(manager, generation):
+def _get_state(dataset, index) -> "np.array":
+    return np.concatenate((_get_prices(dataset, index), [calculate_rsi(dataset, index)]))
+
+def _get_state(dataset, index):
+    return np.concatenate((
+        _get_prices(dataset, index),
+        _get_rsi(dataset, index, [7, 14, 30, 90, 360])
+    ))
+
+def simulation(manager, generation, rent=True):
     # XXX add tests for manachhhher and brain
     decision_log = []
     dead = []
@@ -179,7 +229,8 @@ def simulation(manager, generation):
         act = agent.decide(state)
 
         agent.money += fitness(agent.dataset, agent.index, act)
-        agent.money -= min(generation / 200, 1)
+        if rent:
+            agent.money -= min(generation / 300, 1)
         if agent.money < 0:
             dead.append(agent)
 

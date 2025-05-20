@@ -1,7 +1,14 @@
 import numpy as np
-from utils import mc_ci, estimate_parameters
+from utils import mc_ci, estimate_parameters, calculate_profit, calculate_rsi
 from tqdm import tqdm
 import random
+
+from agent import (
+    Agent,
+    Manager,
+    load_agent,
+    evaluate,
+)
 
 BUY = 1
 SELL = -1
@@ -12,6 +19,14 @@ STATE = {
     "stock": 0,
     "risk": 0,
 }
+
+
+class GlobalState:
+    """
+    For policies that need to perform heavy number-crunching. Don't abuse it.
+    """
+
+    pass
 
 
 def _net_worth(prices, state, index=-1):
@@ -36,11 +51,42 @@ def _extract_logs(logs: dict, log: dict):
         logs[key].append(log[key])
 
 
-# policies
+def policy_agent(prices, index, risk, history, load=False):
+    """
+    Use the agent.
+
+    Enable `load` if you want to load an exported agent.
+    """
+    if not history or not hasattr(GlobalState, "agent"):
+        # new agent
+        if load:
+            agent = load_agent()
+        else:
+            agent = Agent()
+            manager = Manager([agent], agent.brain.size)
+            # evaluation function
+            manager.report(agent)
+        GlobalState.agent = agent
+
+    agent = GlobalState.agent
+    # we don't use .advance to avoid switching datasets
+    # at the end
+    agent.dataset = prices
+    agent.index = index
+
+    action = agent.decide(agent.get_state())
+
+    return {
+        "action": action,
+        # chain of thought, etc
+        "logs": {},
+    }
+
+
 def policy_threshold(prices, index, risk, history, window_size=10, before_window=True):
     """
     1. Calculate 10-day moving average
-    2. See if it's (almost) outside bounds given an alhpa
+    2. See if it's (almost) outside bounds given an alpha
 
     The size of the window and wheter to check before or after can be configured.
     """
@@ -82,7 +128,6 @@ def policy_rsi(
     days=10,
     overbought=90,
     oversold=30,
-    risk_adjusted_thresholds=False,
 ):
     """RSI-based trading policy with risk-adjusted thresholds
 
@@ -100,17 +145,13 @@ def policy_rsi(
         dict: Trading action (-1, 0, 1) and logs
     """
     # Calculate RSI using pure function
-    rsi_value = _calculate_rsi(prices, index, days)
+    rsi_value = calculate_rsi(prices, index, days)
 
     if rsi_value is None:  # Not enough data
         return {
             "action": WAIT,
             "logs": {},
         }
-
-    # Adjust thresholds based on risk
-    if risk_adjusted_thresholds:
-        overbought, oversold = _adjust_thresholds(risk, overbought, oversold)
 
     # Determine action
     action = WAIT
@@ -129,48 +170,10 @@ def policy_rsi(
     }
 
 
-def _calculate_rsi(prices, current_index, period=14):
-    """Pure function calculating RSI for given index"""
-    if current_index < period:
-        return None
-
-    gains = []
-    losses = []
-
-    for i in range(current_index - period + 1, current_index + 1):
-        if i == 0:
-            continue
-        change = prices[i] - prices[i - 1]
-        if change > 0:
-            gains.append(change)
-        else:
-            losses.append(abs(change))
-
-    avg_gain = sum(gains) / period if gains else 0
-    avg_loss = sum(losses) / period if losses else 0
-
-    if avg_loss == 0:
-        return 100 if avg_gain != 0 else 50
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-def _adjust_thresholds(risk, base_overbought, base_oversold):
-    """Adjust RSI thresholds based on risk tolerance (0-1)"""
-    # Higher risk tolerance widens the neutral zone
-    risk_factor = 1 - abs(risk - 0.5) * 2  # 0-1 where 0.5 is neutral
-    adjusted_ob = base_overbought + (30 * (1 - risk_factor))
-    adjusted_os = base_oversold - (30 * (1 - risk_factor))
-
-    # Keep thresholds within reasonable bounds
-    return (min(max(adjusted_ob, 60), 90), max(min(adjusted_os, 40), 10))
-
-
 def policy_med(prices, index, risk, history, window_size=10, before_window=True):
     """
     1. Calculate 10-day moving average
-    2. See if it's (almost) outside bounds given an alhpa
+    2. See if it's (almost) outside bounds given an alpha
 
     The size of the window and wheter to check before or after can be configured.
     """
@@ -216,41 +219,13 @@ def policy_monkey(prices, index, risk, history):
     }
 
 
-POLICIES = [policy_threshold, policy_monkey, policy_med, policy_rsi]
-
-BASE_CAPITAL = 1 * (10**6)
-
-
-def _get_order_size(price, volume):
-    return volume // price
-
-
-def execute_action(price, state, action: int):
-    """
-    Execute an action. The order size and (somewhat) dynamic sub-policies to buy and sell can
-    be configured
-    """
-    # we always want to have the same volume of movement
-    # through all the simulation
-
-    order_size = _get_order_size(price, BASE_CAPITAL)
-
-    state["capital"] -= action * order_size * price
-    state["stock"] += order_size * action
-
-
-def _get_lookback(risk):
-    if risk > 0.79:
-        return 7
-    elif risk > 0.65:
-        return 15
-    elif risk > 0.49:
-        return 27
-    elif risk > 0.32:
-        return 37
-    elif risk > 0.19:
-        return 45
-    return 45
+POLICIES = [
+    policy_threshold,
+    policy_monkey,
+    policy_med,
+    policy_rsi,
+    policy_agent,
+]
 
 
 def general_policy(
@@ -258,13 +233,10 @@ def general_policy(
     state,
     risk,
     policy,
-    handle_action,
     orders=True,
     concurrent_orders=False,
     auto_close=7,
     reverse_strategy=False,
-    memoryless=False,
-    apply_order=True,
 ):
     """
     In general, iterate the prices and apply a policy.
@@ -277,10 +249,11 @@ def general_policy(
     Modifies the state and returns None.
 
     `orders` enables or disables stop-loss and take-profit
+
     `concurrent_orders` enables or disables concurrent orders (if we should wait when we have an order up)
+
     `auto_close` Closes a stale order after `auto_close` days. The CIs are calculated using this value so be careful.
-    `memoryless` enables or disables memory (transform our simulation into a Markov process)
-    `apply_order` if you only want to see the orders made by the policy disable this
+
     """
     policy = policy or (lambda p, i, l, s: 0)
     state = state or STATE
@@ -295,40 +268,13 @@ def general_policy(
     # (index (completed), price, order)
     # where order is a tuple with
     # (TYPE, upper_bound, lower_bound, index (issues))
-    order_log = []
-    last_action = 0
-    current_order = (0, float("inf"), float("-inf"), 0)
+    current_order = -auto_close
     for index in tqdm(range(len(prices))):
         price = prices[index]
 
-        # Confidence intervals for stop-loss and profit
-        S0 = price
-        _, lower_mc, higher_mc = mc_ci(prices, 0, index, days=auto_close, alpha=risk)
-
-        # Close Order
-        # we also sell/buy immediately if the order is too old
-        if (
-            (current_order[1] <= price or current_order[2] >= price)
-            or index - current_order[3] >= auto_close
-        ) and orders:
-            # we complete the operation before doing anything else
-            if not memoryless:
-                handle_action(price, state, -current_order[0])
-            order_log.append((index, price, current_order))
-            current_order = (0, float("inf"), float("-inf"), index)
-
-            # Choose to show logs and make the operation more
-            # `realistic`. This makes the graphic somewhat dirty
-            # so disable it if you want less noise
-            if apply_order:
-                action_log.append(-current_order[0])
-                health = _net_worth(prices, state, index)
-                net_log.append(health)
-                continue
-
         # we can't place another order if we
         # already have an order placed
-        if current_order[0] and not concurrent_orders:
+        if (current_order + auto_close >= index) and concurrent_orders:
             action_log.append(WAIT)
             health = _net_worth(prices, state, index)
             net_log.append(health)
@@ -341,22 +287,18 @@ def general_policy(
             action = -action
         _extract_logs(policy_logs, res["logs"])
 
-        # independant of the order type
-        top = higher_mc
-        bottom = lower_mc
-        current_order = (action, top, bottom, index)
-
-        last_action = action
         action_log.append(action)
-        if not memoryless:
-            handle_action(price, state, action)
+        if orders:
+            #state["capital"] += action * calculate_profit(
+            #    prices, index, auto_close, risk
+            #)
+            state["capital"] += evaluate.fitness(prices, index, action, auto_close)
 
         health = _net_worth(prices, state, index)
         net_log.append(health)
 
     logs = {
         "action": action_log,
-        "order": order_log,
         "net_worth": net_log,
         "policy": policy_logs,
     }

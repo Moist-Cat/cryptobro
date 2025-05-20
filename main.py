@@ -5,7 +5,6 @@ from collections import Counter
 import concurrent.futures
 import functools
 from pathlib import Path
-import json
 
 import streamlit as st
 import numpy as np
@@ -50,6 +49,7 @@ from meta import (
 from agent import (
     core,
     gene,
+    save_agent,
 )
 
 
@@ -253,8 +253,8 @@ def verify_loglaplace(prices):
         label="Log Ratios",
     )
     x = np.linspace(log_ratios.min(), log_ratios.max(), 100)
-    ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label="Fitted Laplace")
-    ax1.set_title("Log-Ratios Distribution vs Laplace Fit")
+    ax1.plot(x, DIST.pdf(x, *DIST.fit(log_ratios)), "r-", label=f"Fitted {DIST_NAME}")
+    ax1.set_title(f"Log-Ratios Distribution vs {DIST_NAME} Fit")
     ax1.legend()
 
     fig_qq, ax2 = plt.subplots(figsize=(10, 4))
@@ -382,9 +382,9 @@ def plot_predictions_vs_outcomes(prices, actions, window=3):
         if not action:
             continue
 
-        if action == 1:
+        if action > 0:
             color = "green"
-        else:
+        elif action < 0:
             color = "red"
 
         ax.scatter(i, prices[i], color=color, alpha=0.8, s=80)
@@ -415,7 +415,8 @@ def calculate_policy_metrics(prices, actions, window=7):
         # future_return = (prices[i+window] - prices[i]) / prices[i]
         future_return = prices[i + window] - prices[i]
         future_gain = prices[i + window] / prices[i]
-        action_type = "buy" if actions[i] == 1 else "sell"
+        # action_type = "buy" if actions[i] == 1 else "sell"
+        action_type = "buy" if actions[i] > 0 else ("sell" if actions[i] else "wait")
 
         results[action_type]["returns"].append(future_gain - 1)
         results[action_type]["total"] += 1
@@ -532,7 +533,7 @@ def agents_section():
         with col1:
             init_agents = st.number_input("Initial Agents", 1, 1000, 1)
             init_cash = st.number_input("Starting Cash", 100, 1_000_000, 100)
-            iter_num = st.number_input("Skip number", 10, 1000, 100)
+            iter_num = st.number_input("Skip number", 10, 1_000_000, 100)
         with col2:
             elite_threshold = st.slider(
                 "Elite Threshold",
@@ -542,8 +543,9 @@ def agents_section():
                 help="Percentage of top performers to keep",
             )
             mutation_rate = st.slider("Mutation Rate", 0.0, 1.0, 0.05)
+            rent = st.checkbox("Enable rent", True)
         with col3:
-            max_generations = st.number_input("Max Generations", 1, 1000, 300)
+            max_generations = st.number_input("Max Generations", 1, 100000, 300)
             stop_condition = st.selectbox(
                 "Stop Condition", ["Population Size", "Generations"]
             )
@@ -565,18 +567,18 @@ def agents_section():
         control_cols = st.columns([1, 1, 1, 2])
         with control_cols[0]:
             if st.button("⏩ Step Forward"):
-                log = core.simulation(st.session_state.manager, current_gen)
+                log = core.simulation(st.session_state.manager, current_gen, rent)
                 st.session_state.logs.append(log)
 
         with control_cols[1]:
             if st.button(f"⏩⏩ {iter_num} Steps"):
                 progress = st.progress(0)
-                for i in range(iter_num):
+                for i in tqdm(range(iter_num)):
                     if (len(st.session_state.manager.agents) / init_agents) <= (
                         elite_threshold / 100
                     ):
                         break
-                    log = core.simulation(st.session_state.manager, current_gen)
+                    log = core.simulation(st.session_state.manager, current_gen, rent)
                     st.session_state.logs.append(log)
                     current_gen += 1
                     progress.progress(i / iter_num)
@@ -590,7 +592,7 @@ def agents_section():
                     current_gen < max_generations
                     and len(st.session_state.manager.agents) > 2
                 ):
-                    log = core.simulation(st.session_state.manager, current_gen)
+                    log = core.simulation(st.session_state.manager, current_gen, rent)
                     st.session_state.logs.append(log)
                     current_gen += 1
                     progress.progress(current_gen / max_generations)
@@ -599,12 +601,15 @@ def agents_section():
             children = gene.biased_crossover(agents, init_agents, init_cash)
             for child in children:
                 st.session_state.manager.report(child)
+        if st.button("Export Agent"):
+            agent = st.session_state.manager.agents[0]
+            save_agent(agent)
 
         # Section 4: Visualization
         st.subheader("📈 Population Dynamics")
 
         # Real-time metrics
-        metric_cols = st.columns(3)
+        metric_cols = st.columns(4)
         with metric_cols[0]:
             st.metric("Current Population", len(st.session_state.manager.agents))
         with metric_cols[1]:
@@ -612,6 +617,25 @@ def agents_section():
 
             st.metric("Average Capital", f"${avg_money:,.2f}")
         with metric_cols[2]:
+            avg_earnings = np.array(
+                list(
+                    np.array(
+                        list(
+                            map(
+                                lambda a: a["evaluation"],
+                                st.session_state.manager.personnel[agent].values(),
+                            )
+                        )
+                    ).mean()
+                    for agent in st.session_state.manager.agents
+                )
+            )
+            st.metric(
+                "Average Success Rate",
+                f"{avg_earnings.mean():.2}",
+            )
+
+        with metric_cols[3]:
             st.metric("Generation", len(st.session_state.logs))
 
         # Evolution history plot
@@ -668,7 +692,8 @@ def agents_section():
         gene_df = pd.DataFrame(
             [agent.brain.dna for agent in st.session_state.manager.personnel]
         )
-        st.dataframe(gene_df.describe())
+        if st.session_state.manager.agents:
+            st.dataframe(gene_df.describe())
 
     else:
         st.warning("Initialize population first!")
@@ -943,9 +968,6 @@ def main():
         general_policy = _configure_algorithm(
             st, [policy.general_policy], "General policy"
         )
-        handle_action = _configure_algorithm(
-            st, [policy.execute_action], "Action sub-policy"
-        )
         selected_policy = _configure_algorithm(st, policy.POLICIES, "Select policy")
 
         start_state = policy.STATE.copy()
@@ -974,7 +996,6 @@ def main():
                 state=start_state,
                 risk=risk,
                 policy=selected_policy,
-                handle_action=handle_action,
             )
             _show_policy(start_state, state, logs, prices)
             st.session_state.history = logs["action"]

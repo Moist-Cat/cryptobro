@@ -137,7 +137,7 @@ def simulate_prices(prices, N, num_paths=1, start=0, end=None):
     return prices
 
 
-def stock_price_ci(prices, days=5, alpha=0.05, n_sim=10000, start=0, end=None):
+def stock_price_ci(prices, days=7, alpha=0.05, n_sim=10000, start=0, end=None):
     """
     Constructs confidence intervals for future stock prices using loglaplace distribution properties.
 
@@ -171,7 +171,7 @@ def stock_price_ci(prices, days=5, alpha=0.05, n_sim=10000, start=0, end=None):
     }
 
 
-def mc_ci(prices, start, end, days=5, alpha=0.05, n_sim=10000):
+def mc_ci(prices, start, end, days=7, alpha=0.05, n_sim=10000):
     """
     Generate confidence intervals with a Monte Carlo simulation.
     """
@@ -211,20 +211,51 @@ def process_window(prices, start, end, window_size, alpha, n_sim):
     return None
 
 
-def calculate_profit(prices, index, max_days=5, alpha=0.66, n_sim=1000):
+def calculate_profit(prices, index, max_days=7, alpha=0.66, n_sim=1000):
     """
     Utility function to quickly compute profit/debt.
     """
+    if (index + max_days) >= len(prices):
+        return 0
+
     res = process_window(prices, 0, index, max_days, alpha, n_sim)
     start = prices[index]
+
     if res is None:
         end = prices[index + max_days]
     else:
-        end = res["lower"] if res["price"] > res["lower"] else res["upper"]
+        end = res["lower"] if res["price"] < res["lower"] else res["upper"]
 
     # 1.03 - 1 = 0.03
     # 0.95 - 1 = -0.05
     return ((end / start) - 1) * 100
+
+
+def calculate_rsi(prices, current_index, period=10):
+    """Pure function calculating RSI for given index"""
+    if current_index < period:
+        return 50
+
+    gains = []
+    losses = []
+
+    for i in range(current_index - period + 1, current_index + 1):
+        if i == 0:
+            continue
+        change = prices[i] - prices[i - 1]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    avg_gain = sum(gains) / period if gains else 0
+    avg_loss = sum(losses) / period if losses else 0
+
+    if avg_loss == 0:
+        return 100 if avg_gain != 0 else 50
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 
 if __name__ == "__main__":

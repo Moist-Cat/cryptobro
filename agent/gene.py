@@ -47,10 +47,7 @@ def biased_crossover(parents, init_agents, init_money):
         child_dna = mutate(child_dna, mutation_rate=np.std([p1.money, p2.money]))
 
         # Inherit hierarchical cognitive structures
-        child_brain = Brain(
-            genes=child_dna,
-            size=p1.brain.size
-        )
+        child_brain = Brain(genes=child_dna, size=p1.brain.size)
 
         # Experience transfer using fitness-weighted memory
         for parent in [p1, p2]:

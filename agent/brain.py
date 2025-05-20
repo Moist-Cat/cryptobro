@@ -52,7 +52,7 @@ class Brain:
         self._short_term_free = 0
 
         self.long_term_memory = PCA(
-            n_components=int(self.dna[PARAMS["pca_components"]])
+            n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
         )
         self._long_term_raw = np.zeros(
             (int(self.dna[PARAMS["long_term_memory"]]), size)
@@ -111,8 +111,8 @@ class Brain:
             # empty, great
             try:
                 self.long_term_memory.fit(self.memory)
-            except:
-                breakpoint()
+            except Exception as exc:
+                raise 
             max_mem = min(len(self._long_term_raw), len(self.memory))
             for i in range(0, max_mem):
                 self.remember_long_term(self.memory[i])
@@ -146,7 +146,7 @@ class Brain:
 
         # repeated code
         self.long_term_memory = PCA(
-            n_components=int(self.dna[PARAMS["pca_components"]])
+            n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
         )
         self.long_term_memory.fit(self._long_term_raw)
         # invalidate cache
@@ -189,7 +189,7 @@ class Brain:
         """
         Evaluate results from lower layers.
         """
-        # i.e. calculate loss function
+        # sim scores shouldn't be negative
         # set priorities
         if not cluster.any():
             return 0
@@ -199,27 +199,36 @@ class Brain:
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
             evaluations[i] = evaluation * weight * penalize_young(count)
+            #evaluations[i] = evaluation
 
         # take the closeness into consideration
-        #return np.dot(evaluations, sim_scores)[0]
+        # return np.dot(evaluations, sim_scores)[0]
+        #
+        # k-nn
+        #if (evaluations >= 0).all():
+        #    return 1
+        #elif (evaluations <= 0).all():
+        #    return -1
+        #else:
+        #    return 0
         return evaluations.mean()
 
-    def create(self, information):
+    # def evaluate(self, cluster, sim_scores):
+    #    pass
+
+    def create(self, hypothesis, evaluation):
         """
         Generate an hyphothesis (higher-dimension information) based on the information
          currently available, generating new knowledge.
         """
-        closest_scores, closest_indices, cluster = self.compare(information)
-        evaluation = self.evaluate(cluster, closest_scores)
-        # print(f"{evaluation=} ; {self.size=}")
-        if evaluation == 0:
+        if evaluation == 0 and not self.child:
             # random if we have no information
-            evaluation = random.random() * 2 - 1
+            evaluation = random.choice((-1, 1))
         # create rule based on current event
         rule = np.concatenate(
             (
-                information,
-                np.array([evaluation]),
+                hypothesis,
+                np.array([evaluation]), # thesis
             )
         )
 
@@ -232,7 +241,16 @@ class Brain:
         if not self.memory_full:
             return []
 
-        rule = self.create(information)
+        closest_scores, closest_indices, cluster = self.compare(information)
+        evaluation = self.evaluate(cluster, closest_scores)
+
+        if not cluster.any():
+            # no idea
+            return []
+
+        print(evaluation, cluster, closest_scores)
+        #rule = self.create(cluster.mean(axis=0), evaluation)
+        rule = self.create(information, evaluation)
         parent_feedback = []
         if not self.parent:
             self.parent = self._create_parent(rule)
@@ -258,8 +276,11 @@ class Brain:
         return brain
 
     def _evaluate_cot(self, cot):
-        # return np.array(cot).prod()
         return np.array(cot).mean()
+        p = np.array(cot).prod()
+        #if not p:
+        #    return np.array(cot).mean()
+        return p
 
     def decide(self, information):
         chain_of_thought = self.think(information)

@@ -1,13 +1,13 @@
+from agent.config import EVAL_WINDOW
 from utils import calculate_profit
 
 
-def fitness(prices, index, action, window=5):
+def fitness(prices, index, action, window=EVAL_WINDOW):
     return evaluate(prices, index, window) * action
 
-    return action * calculate_profit(prices, index)
 
-
-def evaluate(prices, index, window=5):
+def evaluate(prices, index, window=EVAL_WINDOW):
     if len(prices) - window <= index:
-        return None
+        print("WARNING - Lookahead!", window, index, prices[-1])
+        return 0
     return calculate_profit(prices, index, max_days=window)
