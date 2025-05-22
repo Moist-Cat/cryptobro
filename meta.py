@@ -2,14 +2,14 @@ from pathlib import Path
 import functools
 import inspect
 
-from scipy.stats import laplace, gennorm
+from scipy.stats import laplace, gennorm, gamma
 
 import pandas as pd
 
 DIST = gennorm
-#DIST = laplace
+# DIST = laplace
 DIST_NAME = "gennorm"
-#DIST_NAME = "laplace"
+# DIST_NAME = "laplace"
 
 BASE_DIR = Path(__file__).parent
 

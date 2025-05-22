@@ -17,32 +17,34 @@ def generate_datasets(real_prices: list, n_sim=1000):
     synthetic = []
     for prices in real_prices:
         # Random Laplacian walks
-        synthetic.append(
-            simulate_prices(prices, len(prices), 1)[0]
-        )
+        synthetic.append(simulate_prices(prices, len(prices), 1)[0])
 
     mixed = []
     for idx in range(0, len(real_prices), 2):
         prices = real_prices[idx]
 
-        mixed.append(
-            simulate_prices(prices, len(prices), 1)[0]
-        )
+        mixed.append(simulate_prices(prices, len(prices), 1)[0])
 
     mixed.extend(random.choices(real_prices, k=len(real_prices) - len(mixed)))
     return synthetic, mixed
 
 
-def trend_threshold(prices, risk=0.66, window_size=10, before_window=True, days=15, upper=0.9, lower=0.1):
+def trend_threshold(
+    prices, risk=0.66, window_size=10, before_window=True, days=15, upper=0.9, lower=0.1
+):
     """
     1. Calculate 10-day moving average
     2. See if it's (almost) outside bounds given an alhpa
 
     The size of the window and wheter to check before or after can be configured.
     """
-    window = sum(prices[(len(prices) - 1) - window_size : len(prices) - 1]) / window_size
+    window = (
+        sum(prices[(len(prices) - 1) - window_size : len(prices) - 1]) / window_size
+    )
 
-    _, lower_mc, higher_mc = mc_ci(prices, 0, len(prices) - 1, days=window_size, alpha=risk, n_sim=1000)
+    _, lower_mc, higher_mc = mc_ci(
+        prices, 0, len(prices) - 1, days=window_size, alpha=risk, n_sim=1000
+    )
 
     A = lower_mc
     B = higher_mc
@@ -114,6 +116,7 @@ def trend_monkey(prices):
 
 
 TREND = [trend_hodl, trend_monkey, trend_threshold, trend_rsi]
+
 
 def validate_trends(test, validation, trends):
     failures = 0
@@ -209,8 +212,8 @@ def validate_trend_hyphotesis(real_prices, n_runs, lookahead, trend_detection_al
     # Initialize accumulators
     agg_metrics = {
         "real": {"total": 0, "guesses": 0, "failures": 0},
-        #"synth": {"total": 0, "guesses": 0, "failures": 0},
-        #"mixed": {"total": 0, "guesses": 0, "failures": 0},
+        # "synth": {"total": 0, "guesses": 0, "failures": 0},
+        # "mixed": {"total": 0, "guesses": 0, "failures": 0},
     }
 
     price_change = []
@@ -220,20 +223,20 @@ def validate_trend_hyphotesis(real_prices, n_runs, lookahead, trend_detection_al
     # bootstrapping!
     for run in range(n_runs):
         # Generate new synthetic data each run
-        #synthetic, mixed = generate_datasets(
+        # synthetic, mixed = generate_datasets(
         #    random.choices(real_prices, k=len(real_prices))
-        #)
+        # )
 
         # Calculate metrics
         r = show_trends_with_metrics(real_prices, trend_detection_algo, lookahead)
-        #s = show_trends_with_metrics(synthetic, trend_detection_algo, lookahead)
-        #m = show_trends_with_metrics(mixed, trend_detection_algo, lookahead)
+        # s = show_trends_with_metrics(synthetic, trend_detection_algo, lookahead)
+        # m = show_trends_with_metrics(mixed, trend_detection_algo, lookahead)
 
         # Accumulate results
         for key in ["total", "guesses", "failures"]:
             agg_metrics["real"][key] += r[key]
-            #agg_metrics["synth"][key] += s[key]
-            #agg_metrics["mixed"][key] += m[key]
+            # agg_metrics["synth"][key] += s[key]
+            # agg_metrics["mixed"][key] += m[key]
 
         progress_bar.progress((run + 1) / n_runs)
 
@@ -259,8 +262,10 @@ def display_final_results(results, n_runs):
 
     # col1, col2, col3 = st.columns(3)
     cols = st.columns(3)
-    #datasets = ["real", "synth", "mixed"]
-    datasets = ["real",]
+    # datasets = ["real", "synth", "mixed"]
+    datasets = [
+        "real",
+    ]
 
     for index, dataset in enumerate(datasets):
         with cols[index]:
@@ -314,16 +319,16 @@ def display_final_results(results, n_runs):
                 real_fail=results["real"]["failures"],
                 real_prec=results["real"]["failures"] / results["real"]["guesses"],
                 real_rec=results["real"]["guesses"] / results["real"]["total"],
-                #synth_total=results["synth"]["total"],
-                #synth_guess=results["synth"]["guesses"],
-                #synth_fail=results["synth"]["failures"],
-                #synth_prec=results["synth"]["failures"] / results["synth"]["guesses"],
-                #synth_rec=results["synth"]["guesses"] / results["synth"]["total"],
-                #mixed_total=results["mixed"]["total"],
-                #mixed_guess=results["mixed"]["guesses"],
-                #mixed_fail=results["mixed"]["failures"],
-                #mixed_prec=results["mixed"]["failures"] / results["mixed"]["guesses"],
-                #mixed_rec=results["mixed"]["guesses"] / results["mixed"]["total"],
+                # synth_total=results["synth"]["total"],
+                # synth_guess=results["synth"]["guesses"],
+                # synth_fail=results["synth"]["failures"],
+                # synth_prec=results["synth"]["failures"] / results["synth"]["guesses"],
+                # synth_rec=results["synth"]["guesses"] / results["synth"]["total"],
+                # mixed_total=results["mixed"]["total"],
+                # mixed_guess=results["mixed"]["guesses"],
+                # mixed_fail=results["mixed"]["failures"],
+                # mixed_prec=results["mixed"]["failures"] / results["mixed"]["guesses"],
+                # mixed_rec=results["mixed"]["guesses"] / results["mixed"]["total"],
             )
         )
 

@@ -83,42 +83,6 @@ def policy_agent(prices, index, risk, history, load=False):
     }
 
 
-def policy_threshold(prices, index, risk, history, window_size=10, before_window=True):
-    """
-    1. Calculate 10-day moving average
-    2. See if it's (almost) outside bounds given an alpha
-
-    The size of the window and wheter to check before or after can be configured.
-    """
-    if index < window_size:
-        return {"action": WAIT, "logs": {}}
-    window = sum(prices[index - window_size : index]) / window_size
-
-    S0 = prices[index - window_size * before_window]  # True/False are integers
-
-    _, lower_mc, higher_mc = mc_ci(prices, 0, index, days=window_size, alpha=risk)
-
-    A = lower_mc
-    B = higher_mc
-    C = window
-    result = (C - A) / (B - A)
-
-    action = WAIT
-
-    if result > 0.9:
-        action = SELL
-    elif result < 0.1:
-        action = BUY
-
-    return {
-        "action": action,
-        "logs": {
-            "ci": (lower_mc, higher_mc),
-            "moving_average": window,
-        },
-    }
-
-
 # rsi
 def policy_rsi(
     prices,
@@ -170,19 +134,34 @@ def policy_rsi(
     }
 
 
-def policy_med(prices, index, risk, history, window_size=10, before_window=True):
+def policy_med(
+    prices,
+    index,
+    risk,
+    history,
+    window_size=10,
+    before_window=True,
+    assume_laplacian=True,
+    oversold=1.0,
+    overbought=0.0,
+):
     """
-    1. Calculate 10-day moving average
-    2. See if it's (almost) outside bounds given an alpha
+    1. Calculate 10-day moving mean/median
+    2. See if it's outside bounds given an alpha
 
     The size of the window and wheter to check before or after can be configured.
+    `assume_laplace` controls whether to use the median or the mean.
+    The median is more resistant to volatility and thus, is the default.
     """
     if index < window_size:
         return {"action": WAIT, "logs": {}}
 
     frame = prices[index - window_size : index]
 
-    window = np.median(frame)
+    if assume_laplacian:
+        window = np.median(frame)
+    else:
+        window = np.mean(frame)
 
     S0 = prices[index - window_size * before_window]  # True/False are integers
 
@@ -204,24 +183,29 @@ def policy_med(prices, index, risk, history, window_size=10, before_window=True)
         "action": action,
         "logs": {
             "ci": (lower_mc, higher_mc),
-            "moving_average": window,
+            "moving_centrality": window,
         },
     }
 
 
-def policy_monkey(prices, index, risk, history):
+def policy_monkey(prices, index, risk, history, no_wait=False):
     """
     Random. Use this to judge if your policy sucks.
+    Enable `no_wait` to prevent the monkey from HOLD/WAITing
     """
+    if no_wait:
+        action = random.choice((-1, 1))
+    else:
+        action = random.choice((-1, 0, 1))
+
     return {
-        "action": random.choice((-1, 0, 1)),
+        "action": action,
         "logs": {},
     }
 
 
 POLICIES = [
     policy_agent,
-    policy_threshold,
     policy_monkey,
     policy_med,
     policy_rsi,
@@ -289,9 +273,9 @@ def general_policy(
 
         action_log.append(action)
         if orders:
-            #state["capital"] += action * calculate_profit(
+            # state["capital"] += action * calculate_profit(
             #    prices, index, auto_close, risk
-            #)
+            # )
             state["capital"] += evaluate.fitness(prices, index, action, auto_close)
 
         health = _net_worth(prices, state, index)

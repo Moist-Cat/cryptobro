@@ -33,8 +33,6 @@ from utils import (
     stock_price_ci,
     mc_ci,
     process_window,
-    # pca
-    general_pca,
     # autocorr
     find_clusters,
 )
@@ -224,8 +222,6 @@ def validate_ci_coverage(
 
     Parameters:
     prices (array): Historical price data
-    mu (float): Annualized drift
-    sigma (float): Annualized volatility
     window_size (int): Days ahead to predict (n in your algorithm)
     alpha (float): Significance level
     n_sim (int): Number of simulations for Monte Carlo CI
@@ -531,7 +527,7 @@ def agents_section():
                     st.session_state.logs.append(log)
                     current_gen += 1
                     progress.progress(current_gen / max_generations)
-                    
+
                     if len(st.session_state.manager.agents) <= 2 and auto_cross:
                         agents = st.session_state.manager.agents
                         children = gene.biased_crossover(agents, init_agents, init_cash)
@@ -726,16 +722,15 @@ def main():
                 args = estimate_parameters(price_sample)
                 mu_hat = args[0]
                 sigma_hat = args[1]
+                skew_hat = args[2]
                 st.markdown(
                     f"""
                 **Estimated Parameters for n={len(price_sample)}**:
                 - $\hat{{\mu}}$ = {mu_hat:.6f}
                 - $\hat{{\sigma}}$ = {sigma_hat:.6f}
-                - $\hat{{\\alpha}}$ = {mu_hat + 0.5 * sigma_hat**2:.6f}
+                - $\hat{{\\alpha}}$ = {skew_hat:.6f}
                 """
                 )
-                st.session_state.mu_hat = mu_hat
-                st.session_state.sigma_hat = sigma_hat
 
             with st.expander(
                 "Step 2: Verify distribution with new parameters", expanded=True
@@ -763,33 +758,15 @@ def main():
         # Parameters (use estimated or manual)
         col1, col2 = st.columns(2)
         with col1:
-            S0 = st.number_input("Initial Price (S₀)", value=100.0)
             T = st.number_input("Days (T)", value=7)
-            aleph = st.number_input("Error (alpha)", value=0.1)
+            aleph = st.number_input("Error (alpha)", value=0.66)
+            plot_graph = st.checkbox("Plot graph", False)
+        with col2:
+            num_paths = st.number_input("Paths", value=1000)
+            lookback_days = st.number_input("Lookback days", value=240)
             dynamic_estimation = st.checkbox(
                 "Dynamic estimation (moving median)", False
             )
-            plot_graph = st.checkbox("Plot graph", False)
-
-        with col2:
-            mu = st.number_input(
-                "Drift (μ)",
-                value=getattr(st.session_state, "mu_hat", 0.0005),
-                step=0.00001,
-                format="%0.5f",
-            )
-            sigma = st.number_input(
-                "Volatility (σ)",
-                value=getattr(st.session_state, "sigma_hat", 0.002),
-                step=0.00001,
-                format="%0.5f",
-            )
-
-            num_paths = st.number_input("Paths", value=1000)
-            lookback_days = st.number_input("Lookback days", value=240)
-
-            st.session_state.mu_hat = mu
-            st.session_state.sigma_hat = sigma
 
         if st.button("Run CI Simulation"):
             prices = st.session_state.prices
@@ -903,9 +880,6 @@ def main():
         days_to_verify = st.number_input("Days to verify", value=7, min_value=1)
         risk = st.number_input("Risk", value=risk_val)
 
-        mu = st.session_state.mu_hat
-        sigma = st.session_state.sigma_hat
-
         general_policy = _configure_algorithm(
             st, [policy.general_policy], "General policy"
         )
@@ -945,19 +919,7 @@ def main():
     elif section == "Agents":
         agents_section()
     elif section == "Utils":
-        st.markdown(
-            f"""
-        **Variables**:  
-        - mu: {st.session_state.mu_hat}
-        - sigma: {st.session_state.sigma_hat}
-        """
-        )
-
-        S0 = st.number_input("Initial Price (S₀)", value=100.0)
         T = st.number_input("Days (T)", value=350)
-
-        mu = st.session_state.mu_hat
-        sigma = st.session_state.sigma_hat
 
         if st.button("Generate Prices"):
             prices = st.session_state.prices
@@ -977,7 +939,4 @@ if __name__ == "__main__":
     if "prices" not in st.session_state:
         st.session_state.prices = None
         st.session_state.history = []
-
-        st.session_state.mu_hat = 0
-        st.session_state.sigma_hat = 1
     main()

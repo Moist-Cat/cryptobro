@@ -195,8 +195,6 @@ if __name__ == "__main__":
         {"symbol": "SOLUSDT", "type": CRYPTO},
         {"symbol": "BTCUSDT", "type": CRYPTO},
         {"symbol": "LTCUSDT", "type": CRYPTO},
-    ]
-    _ = [
         {"symbol": "NATURAL_GAS", "type": COMMODITIES},
         {"symbol": "BRENT", "type": COMMODITIES},
         {"symbol": "AAPL", "type": STOCKS},

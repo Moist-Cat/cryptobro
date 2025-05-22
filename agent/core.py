@@ -196,10 +196,10 @@ def _get_prices(dataset, index, days=EVAL_WINDOW):
     """
     Returns a numpy array with the prices for the last `days` days.
     """
-    start, end = max(0, index - (EVAL_WINDOW * 2 + 1)), index
+    start, end = max(0, index - (EVAL_WINDOW + 1)), index
 
     rt = get_log_ratios(dataset[start:end])
-    res = np.concatenate((np.zeros(EVAL_WINDOW * 2 - len(rt)), rt))
+    res = np.concatenate((np.zeros(EVAL_WINDOW - len(rt)), rt))
 
     return res
 
@@ -212,7 +212,7 @@ def _get_rsi(dataset, index, days=None):
 
 def _get_state(dataset, index):
     return np.concatenate((
-        _get_prices(dataset, index),
+        #_get_prices(dataset, index),
         #[],
         _get_rsi(dataset, index, [7, 14, 30, 90, 360]),
     ))

@@ -134,6 +134,8 @@ class Brain:
         if error < self._reconstruction_error:
             return False
 
+        print("ERROR: ", error, self._reconstruction_error)
+
         # Outlier detected
         # Here might take different approaches to fit new data
         # 1. Incremental SVD
@@ -205,7 +207,7 @@ class Brain:
         #return np.dot(evaluations, sim_scores)[0]
         #
         # k-nn
-        print(evaluations)
+        #print(evaluations)
         if (evaluations > 0).all():
             return 1
         elif (evaluations < 0).all():
