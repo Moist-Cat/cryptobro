@@ -206,17 +206,15 @@ def _get_prices(dataset, index, days=EVAL_WINDOW):
 def _get_rsi(dataset, index, days=None):
     days = days or []
     return np.array([
-        calculate_rsi(dataset, index, period=day)
+        calculate_rsi(dataset, index, period=day) - 50
      for day in days
     ])
-
-def _get_state(dataset, index) -> "np.array":
-    return np.concatenate((_get_prices(dataset, index), [calculate_rsi(dataset, index)]))
 
 def _get_state(dataset, index):
     return np.concatenate((
         _get_prices(dataset, index),
-        _get_rsi(dataset, index, [7, 14, 30, 90, 360])
+        #[],
+        _get_rsi(dataset, index, [7, 14, 30, 90, 360]),
     ))
 
 def simulation(manager, generation, rent=True):

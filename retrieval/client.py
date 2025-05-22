@@ -4,12 +4,14 @@ from datetime import datetime, timedelta
 import requests
 import pandas as pd
 
+from meta import DB_DIR
+
 CRYPTO = "CRYPTO"
 COMMODITIES = "COMMODITIES"
 STOCKS = "STOCKS"
 
 class AssetScraper:
-    def __init__(self, storage_dir="../datasets/"):
+    def __init__(self, storage_dir=DB_DIR):
         self.storage_dir = storage_dir
         os.makedirs(storage_dir, exist_ok=True)
 
@@ -193,10 +195,10 @@ if __name__ == "__main__":
         {"symbol": "SOLUSDT", "type": CRYPTO},
         {"symbol": "BTCUSDT", "type": CRYPTO},
         {"symbol": "LTCUSDT", "type": CRYPTO},
-
+    ]
+    _ = [
         {"symbol": "NATURAL_GAS", "type": COMMODITIES},
         {"symbol": "BRENT", "type": COMMODITIES},
-
         {"symbol": "AAPL", "type": STOCKS},
         {"symbol": "AMZN", "type": STOCKS},
         {"symbol": "WMT", "type": STOCKS},

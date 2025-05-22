@@ -220,11 +220,11 @@ def policy_monkey(prices, index, risk, history):
 
 
 POLICIES = [
+    policy_agent,
     policy_threshold,
     policy_monkey,
     policy_med,
     policy_rsi,
-    policy_agent,
 ]
 
 
@@ -234,9 +234,9 @@ def general_policy(
     risk,
     policy,
     orders=True,
-    concurrent_orders=False,
-    auto_close=7,
+    concurrent_orders=True,
     reverse_strategy=False,
+    auto_close=7,
 ):
     """
     In general, iterate the prices and apply a policy.

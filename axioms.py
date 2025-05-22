@@ -4,12 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from utils import estimate_parameters, simulate_prices, mc_ci
+from utils import estimate_parameters, simulate_prices, mc_ci, calculate_rsi
 from main import load_csv
 from scipy.stats import chi2_contingency
 
-from meta import _configure_algorithm
-from utils import DB_DIR
+from meta import _configure_algorithm, DB_DIR
 
 # Core functional components
 def generate_datasets(real_prices: list, n_sim=1000):
@@ -17,94 +16,84 @@ def generate_datasets(real_prices: list, n_sim=1000):
 
     synthetic = []
     for prices in real_prices:
-        mu, sigma = estimate_parameters(prices)
-
         # Random Laplacian walks
         synthetic.append(
-            simulate_prices(random.choice(prices), mu, sigma, len(prices), 1)[0]
+            simulate_prices(prices, len(prices), 1)[0]
         )
 
     mixed = []
     for idx in range(0, len(real_prices), 2):
         prices = real_prices[idx]
-        mu, sigma = estimate_parameters(prices)
 
         mixed.append(
-            simulate_prices(random.choice(prices), mu, sigma, len(prices), 1)[0]
+            simulate_prices(prices, len(prices), 1)[0]
         )
 
     mixed.extend(random.choices(real_prices, k=len(real_prices) - len(mixed)))
     return synthetic, mixed
 
 
-# mu
-def trend_mu(prices, power=0.0, days=15):
-    """
-    Use the moving median (mu parameter of the laplace)
-    to deduce where is the price moving towards.
-
-    The `days` parameter represents the number of days to lookback
-    to estimate parameters. The default is the best value found for 5 days, 15 days.
-    """
-    # last "days" days
-    mu, sigma = estimate_parameters(prices[-days:])
-
-    if abs(mu) < power:
-        return 0
-    else:
-        return 1 if mu > 0 else -1
-
-
-def trend_mu(prices):
-    mu_1, _ = estimate_parameters(prices[-7:])
-    mu_2, _ = estimate_parameters(prices[-15:])
-    mu_3, _ = estimate_parameters(prices[-27:])
-    mu_4, _ = estimate_parameters(prices[-37:])
-
-    # if np.sign(mu_1) == np.sign(mu_2) and np.sign(mu_2) == np.sign(mu_3) and np.sign(mu_1) != np.sign(mu_2):
-    #    return -np.sign(mu_2)
-    if np.sign(mu_1) == np.sign(mu_2):
-        return -np.sign(mu_2)
-    return 0
-
-
-def trend_rev_mu(prices, power=0.01, variance=0.02, days=15):
-    """
-    Aimed to detect the start of the trend instead of its strength
-    """
-    mu, sigma = estimate_parameters(prices[-days:])
-
-    if abs(mu) > power or variance < variance:
-        return 0
-    else:
-        return 1 if mu > 0 else -1
-
-
-def trend_threshold(prices, risk, window_size=10, before_window=True, days=15):
+def trend_threshold(prices, risk=0.66, window_size=10, before_window=True, days=15, upper=0.9, lower=0.1):
     """
     1. Calculate 10-day moving average
     2. See if it's (almost) outside bounds given an alhpa
 
     The size of the window and wheter to check before or after can be configured.
     """
-    location, scale = estimate_parameters(prices[-days:])
-    window = sum(prices[index - window_size : index]) / window_size
+    window = sum(prices[(len(prices) - 1) - window_size : len(prices) - 1]) / window_size
 
-    S0 = prices[index - window_size * before_window]  # True/False are integers
-
-    _, lower_mc, higher_mc = mc_ci(S0, location, scale, days=window_size, alpha=risk)
+    _, lower_mc, higher_mc = mc_ci(prices, 0, len(prices) - 1, days=window_size, alpha=risk, n_sim=1000)
 
     A = lower_mc
     B = higher_mc
     C = window
     result = (C - A) / (B - A)
 
-    action = WAIT
+    action = 0
 
-    if result > 0.9:
-        action = SELL
-    elif result < 0.1:
-        action = BUY
+    if result > upper:
+        action = -1
+    elif result < lower:
+        action = 1
+
+    return action
+
+
+def trend_rsi(
+    prices,
+    days=10,
+    overbought=90,
+    oversold=30,
+):
+    """RSI-based trading policy with risk-adjusted thresholds
+
+    Args:
+        prices: Array of historical prices
+        index: Current time index in the prices array
+        risk: Risk tolerance (0-1) affecting threshold sensitivity
+        history: Trading position history
+        days: RSI calculation period
+        overbought: Default overbought threshold
+        oversold: Default oversold threshold
+        risk_adjusted_thresholds: Whether to adjust thresholds based on risk
+
+    Returns:
+        dict: Trading action (-1, 0, 1) and logs
+    """
+    # Calculate RSI using pure function
+    rsi_value = calculate_rsi(prices, len(prices) - 1, days)
+
+    if rsi_value is None:  # Not enough data
+        return 0
+
+    # Determine action
+    action = 0
+    if rsi_value >= overbought:
+        action = -1
+    elif rsi_value <= oversold:
+        action = 1
+
+    return action
 
 
 # buy and hold
@@ -124,8 +113,7 @@ def trend_monkey(prices):
     return random.choice([-1, 1])
 
 
-TREND = [trend_mu, trend_rev_mu, trend_hodl, trend_monkey]
-
+TREND = [trend_hodl, trend_monkey, trend_threshold, trend_rsi]
 
 def validate_trends(test, validation, trends):
     failures = 0
@@ -221,8 +209,8 @@ def validate_trend_hyphotesis(real_prices, n_runs, lookahead, trend_detection_al
     # Initialize accumulators
     agg_metrics = {
         "real": {"total": 0, "guesses": 0, "failures": 0},
-        "synth": {"total": 0, "guesses": 0, "failures": 0},
-        "mixed": {"total": 0, "guesses": 0, "failures": 0},
+        #"synth": {"total": 0, "guesses": 0, "failures": 0},
+        #"mixed": {"total": 0, "guesses": 0, "failures": 0},
     }
 
     price_change = []
@@ -232,20 +220,20 @@ def validate_trend_hyphotesis(real_prices, n_runs, lookahead, trend_detection_al
     # bootstrapping!
     for run in range(n_runs):
         # Generate new synthetic data each run
-        synthetic, mixed = generate_datasets(
-            random.choices(real_prices, k=len(real_prices))
-        )
+        #synthetic, mixed = generate_datasets(
+        #    random.choices(real_prices, k=len(real_prices))
+        #)
 
         # Calculate metrics
         r = show_trends_with_metrics(real_prices, trend_detection_algo, lookahead)
-        s = show_trends_with_metrics(synthetic, trend_detection_algo, lookahead)
-        m = show_trends_with_metrics(mixed, trend_detection_algo, lookahead)
+        #s = show_trends_with_metrics(synthetic, trend_detection_algo, lookahead)
+        #m = show_trends_with_metrics(mixed, trend_detection_algo, lookahead)
 
         # Accumulate results
         for key in ["total", "guesses", "failures"]:
             agg_metrics["real"][key] += r[key]
-            agg_metrics["synth"][key] += s[key]
-            agg_metrics["mixed"][key] += m[key]
+            #agg_metrics["synth"][key] += s[key]
+            #agg_metrics["mixed"][key] += m[key]
 
         progress_bar.progress((run + 1) / n_runs)
 
@@ -271,7 +259,8 @@ def display_final_results(results, n_runs):
 
     # col1, col2, col3 = st.columns(3)
     cols = st.columns(3)
-    datasets = ["real", "synth", "mixed"]
+    #datasets = ["real", "synth", "mixed"]
+    datasets = ["real",]
 
     for index, dataset in enumerate(datasets):
         with cols[index]:
@@ -319,24 +308,22 @@ def display_final_results(results, n_runs):
             | Dataset   | Total | Guesses | Failures | Precision | Recall |
             |-----------|-------|---------|----------|-----------|--------|
             | Real      | {real_total:.1f} | {real_guess:.1f} | {real_fail:.1f} | {real_prec:.2%} | {real_rec:.2%} |
-            | Synthetic | {synth_total:.1f} | {synth_guess:.1f} | {synth_fail:.1f} | {synth_prec:.2%} | {synth_rec:.2%} |
-            | Mixed     | {mixed_total:.1f} | {mixed_guess:.1f} | {mixed_fail:.1f} | {mixed_prec:.2%} | {mixed_rec:.2%} |
             """.format(
                 real_total=results["real"]["total"],
                 real_guess=results["real"]["guesses"],
                 real_fail=results["real"]["failures"],
                 real_prec=results["real"]["failures"] / results["real"]["guesses"],
                 real_rec=results["real"]["guesses"] / results["real"]["total"],
-                synth_total=results["synth"]["total"],
-                synth_guess=results["synth"]["guesses"],
-                synth_fail=results["synth"]["failures"],
-                synth_prec=results["synth"]["failures"] / results["synth"]["guesses"],
-                synth_rec=results["synth"]["guesses"] / results["synth"]["total"],
-                mixed_total=results["mixed"]["total"],
-                mixed_guess=results["mixed"]["guesses"],
-                mixed_fail=results["mixed"]["failures"],
-                mixed_prec=results["mixed"]["failures"] / results["mixed"]["guesses"],
-                mixed_rec=results["mixed"]["guesses"] / results["mixed"]["total"],
+                #synth_total=results["synth"]["total"],
+                #synth_guess=results["synth"]["guesses"],
+                #synth_fail=results["synth"]["failures"],
+                #synth_prec=results["synth"]["failures"] / results["synth"]["guesses"],
+                #synth_rec=results["synth"]["guesses"] / results["synth"]["total"],
+                #mixed_total=results["mixed"]["total"],
+                #mixed_guess=results["mixed"]["guesses"],
+                #mixed_fail=results["mixed"]["failures"],
+                #mixed_prec=results["mixed"]["failures"] / results["mixed"]["guesses"],
+                #mixed_rec=results["mixed"]["guesses"] / results["mixed"]["total"],
             )
         )
 

@@ -235,6 +235,8 @@ def calculate_rsi(prices, current_index, period=10):
     """Pure function calculating RSI for given index"""
     if current_index < period:
         return 50
+    elif current_index == len(prices):
+        return 50
 
     gains = []
     losses = []

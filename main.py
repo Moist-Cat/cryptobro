@@ -156,73 +156,7 @@ def st_plot_violations(prices, violations, window_size=7):
     )
 
 
-# pca
-def show_pca_analysis():
-    st.title("Commodity Data PCA Analysis")
-
-    # Get directory path from user
-    data_dir = st.text_input("Enter directory path containing CSV files:", DB_DIR)
-
-    if st.button("Run Analysis"):
-        results = general_pca(data_dir)
-
-        if "error" in results:
-            st.error(results["error"])
-            return
-
-        st.subheader("Basic Information")
-        st.write(
-            f"Processed {results['matrix_shape'][0]} files with {results['matrix_shape'][1]} days each"
-        )
-        st.write(f"First 5 files used: {results['files_used'][:5]}")
-
-        st.subheader("PCA Statistics")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.write("**Explained Variance:**")
-            st.write(results["stats"]["explained_variance"])
-
-        with col2:
-            st.write("**Component Statistics:**")
-            st.json(results["stats"])
-
-        figures = {
-            "scree_plot": create_scree_plot(results["pca_model"]),
-            "cumulative_variance": create_cumulative_variance_plot(
-                results["stats"]["cumulative_variance"]
-            ),
-        }
-
-        st.subheader("Visualizations")
-        st.pyplot(figures["scree_plot"])
-        st.pyplot(figures["cumulative_variance"])
-
-
-def create_scree_plot(pca):
-    """Create matplotlib figure for scree plot"""
-    fig, ax = plt.subplots()
-    ax.bar(
-        range(1, len(pca.explained_variance_ratio_) + 1), pca.explained_variance_ratio_
-    )
-    ax.set_title("Scree Plot - Explained Variance per Component")
-    ax.set_xlabel("Principal Component")
-    ax.set_ylabel("Explained Variance Ratio")
-    return fig
-
-
-def create_cumulative_variance_plot(cumulative_variance):
-    """Create matplotlib figure for cumulative variance"""
-    fig, ax = plt.subplots()
-    ax.plot(range(1, len(cumulative_variance) + 1), cumulative_variance, "o-")
-    ax.axhline(0.95, color="r", linestyle="--")
-    ax.set_title("Cumulative Explained Variance")
-    ax.set_xlabel("Number of Components")
-    ax.set_ylabel("Cumulative Explained Variance")
-    return fig
-
-
-def verify_loglaplace(prices):
+def verify_dist(prices):
     """
     Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
     What's that? I mean that the logarithm returns a laplace.
@@ -549,6 +483,7 @@ def agents_section():
             stop_condition = st.selectbox(
                 "Stop Condition", ["Population Size", "Generations"]
             )
+            auto_cross = st.checkbox("Auto Cross", True)
 
     # Section 2: Population Initialization
     if "manager" not in st.session_state:
@@ -596,6 +531,12 @@ def agents_section():
                     st.session_state.logs.append(log)
                     current_gen += 1
                     progress.progress(current_gen / max_generations)
+                    
+                    if len(st.session_state.manager.agents) <= 2 and auto_cross:
+                        agents = st.session_state.manager.agents
+                        children = gene.biased_crossover(agents, init_agents, init_cash)
+                        for child in children:
+                            st.session_state.manager.report(child)
         if st.button("Cross"):
             agents = st.session_state.manager.agents
             children = gene.biased_crossover(agents, init_agents, init_cash)
@@ -799,7 +740,7 @@ def main():
             with st.expander(
                 "Step 2: Verify distribution with new parameters", expanded=True
             ):
-                res = verify_loglaplace(price_sample)
+                res = verify_dist(price_sample)
                 ks_stat, p_value = res["ks_test"]
                 fig = res["fig_hist"]
                 qq = res["fig_qq"]
@@ -1001,120 +942,6 @@ def main():
             st.session_state.history = logs["action"]
 
             policy_validation_page(logs, prices, days_to_verify)
-
-        if st.button("Calculate best alpha and run"):
-            worker = functools.partial(
-                general_policy,
-                prices=prices,
-                state=start_state,
-                policy=selected_policy,
-                handle_action=handle_action,
-            )
-
-            # Generate alpha values (5 to 99)
-            alpha_values = range(5, 100, 1)
-
-            # Parallel execution with progress tracking
-            with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
-                # Map alpha values to risk parameter (α/100)
-                futures = {
-                    executor.submit(worker, risk=alpha / 100): alpha
-                    for alpha in alpha_values
-                }
-
-                # Initialize results list with None values
-                results = [None] * len(alpha_values)
-
-                # Create progress bar
-                with tqdm(total=len(alpha_values), desc="Processing alphas") as pbar:
-                    for future in concurrent.futures.as_completed(futures):
-                        alpha = futures[future]
-                        idx = alpha - alpha_values[0]  # Position in original order
-                        results[idx] = future.result()
-                        pbar.update(1)
-
-            # Remove any None values if using uneven ranges
-            results = [r for r in results if r is not None]
-
-            results.sort(
-                key=lambda v: policy._net_worth(prices, v[0])
-                + 3 * min(v[1]["net_worth"]),
-                reverse=True,
-            )
-
-            worst = results.copy()
-
-            worst.sort(
-                key=lambda v: policy._net_worth(prices, v[0])
-                + 3 * min(v[1]["net_worth"]),
-            )  # best in reverse reverse order
-
-            best_fit = results[:3]
-            worst_case = worst[:3]
-
-            best_risk = best_fit[0][0]["risk"]
-            res = selected_policy(prices, len(prices) - 1, best_risk, history)
-            forecast = res["action"]
-            if forecast > 0:
-                forecast = "BUY"
-            elif forecast < 0:
-                forecast = "SELL"
-            else:
-                forecast = "WAIT"
-            st.markdown(
-                f"""
-                **Today's forecast**: {forecast}
-                - Price: {prices[-1]}
-                - Risk: {best_risk}
-            """
-            )
-
-            st.markdown("**Best ROI**")
-            for result in best_fit:
-                state, logs = result
-                _show_policy(start_state, state, logs, prices)
-
-            st.markdown("**Worst outcome**")
-            for result in worst_case:
-                state, logs = result
-                _show_policy(start_state, state, logs, prices)
-
-            st.markdown("**Confidence intervals**")
-            for d in days:
-                res = stock_price_ci(prices, d, risk, 1000)
-
-                confidence = res["confidence_level"]
-
-                mc_low, mc_high = res["monte_carlo_ci"]
-                mc_low = round(float(mc_low), 2)
-                mc_high = round(float(mc_high), 2)
-
-                with st.expander("CI Stats", expanded=True):
-                    st.markdown(
-                        f"""
-                    **Expected interval ({d} days)**:  
-                    - Confidence = {confidence}  
-                    - lower, upper (M-C) = {mc_low, mc_high}
-                    """
-                    )
-
-            res = stock_price_ci(prices, days[-1], best_risk, 1000)
-
-            confidence = res["confidence_level"]
-
-            mc_low, mc_high = res["monte_carlo_ci"]
-            mc_low = round(float(mc_low), 2)
-            mc_high = round(float(mc_high), 2)
-
-            with st.expander("CI Stats", expanded=True):
-                st.markdown(
-                    f"""
-                **Expected interval ({d} days)**:  
-                - Confidence = {confidence}  
-                - lower, upper (M-C) = {mc_low, mc_high}
-                """
-                )
-
     elif section == "Agents":
         agents_section()
     elif section == "Utils":
@@ -1134,7 +961,7 @@ def main():
 
         if st.button("Generate Prices"):
             prices = st.session_state.prices
-            sim_prices = simulate_prices(S0, len(prices) - 1, T, 1)
+            sim_prices = simulate_prices(prices, len(prices) - 1)
             df = pd.DataFrame({"Close": sim_prices[0]})
 
             num = 0
@@ -1144,8 +971,6 @@ def main():
                 num += 1
                 file = Path.home() / file_fmt.format(num=num)
             df.to_csv(file)
-
-        show_pca_analysis()
 
 
 if __name__ == "__main__":

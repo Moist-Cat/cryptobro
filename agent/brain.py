@@ -198,23 +198,21 @@ class Brain:
         weight = 1 / len(cluster)
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
-            evaluations[i] = evaluation * weight * penalize_young(count)
-            #evaluations[i] = evaluation
+            #evaluations[i] = evaluation * weight * penalize_young(count)
+            evaluations[i] = evaluation
 
         # take the closeness into consideration
-        # return np.dot(evaluations, sim_scores)[0]
+        #return np.dot(evaluations, sim_scores)[0]
         #
         # k-nn
-        #if (evaluations >= 0).all():
-        #    return 1
-        #elif (evaluations <= 0).all():
-        #    return -1
-        #else:
-        #    return 0
-        return evaluations.mean()
-
-    # def evaluate(self, cluster, sim_scores):
-    #    pass
+        print(evaluations)
+        if (evaluations > 0).all():
+            return 1
+        elif (evaluations < 0).all():
+            return -1
+        else:
+            return 0
+        #return evaluations.mean()
 
     def create(self, hypothesis, evaluation):
         """
@@ -248,7 +246,7 @@ class Brain:
             # no idea
             return []
 
-        print(evaluation, cluster, closest_scores)
+        #print(evaluation, cluster, closest_scores)
         #rule = self.create(cluster.mean(axis=0), evaluation)
         rule = self.create(information, evaluation)
         parent_feedback = []
@@ -276,11 +274,11 @@ class Brain:
         return brain
 
     def _evaluate_cot(self, cot):
-        return np.array(cot).mean()
         p = np.array(cot).prod()
+        return p
         #if not p:
         #    return np.array(cot).mean()
-        return p
+        #return p
 
     def decide(self, information):
         chain_of_thought = self.think(information)

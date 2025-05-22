@@ -7,9 +7,9 @@ from scipy.stats import laplace, gennorm
 import pandas as pd
 
 DIST = gennorm
-# DIST = laplace
+#DIST = laplace
 DIST_NAME = "gennorm"
-# DIST_NAME = "laplace"
+#DIST_NAME = "laplace"
 
 BASE_DIR = Path(__file__).parent
 
