@@ -126,6 +126,8 @@ class Manager:
             self.personnel[agent][action_signature]["count"] += 1
             cnt = self.personnel[agent][action_signature]["count"]
 
+            print("INFO - Count", cnt)
+
             self.personnel[agent][action_signature]["evaluation"] = cum / cnt
         else:
             self.personnel[agent][action_signature] = {
@@ -203,21 +205,40 @@ def _get_prices(dataset, index, days=EVAL_WINDOW):
 
     return res
 
+
 def _get_rsi(dataset, index, days=None):
     days = days or []
-    return np.array([
-        calculate_rsi(dataset, index, period=day) - 50
-     for day in days
-    ])
+    return np.array(
+        [
+            (calculate_rsi(dataset, index, period=day)) // 20
+            #(calculate_rsi(dataset, index, period=day)) // 10
+            for day in days
+        ]
+    )
+
 
 def _get_state(dataset, index):
-    return np.concatenate((
-        #_get_prices(dataset, index),
-        #[],
-        _get_rsi(dataset, index, [7, 14, 30, 90, 360]),
-    ))
+    return np.concatenate(
+        (
+            # _get_prices(dataset, index),
+            [],
+            _get_rsi(dataset, index, [7, 14, 30, 90, 360]),
+        )
+    )
 
-def simulation(manager, generation, rent=True):
+
+def simulation(manager, generation, rent=True, horizon=300, era=1000):
+    """
+    Simulate one iteration for each agent.
+
+    The following parameters force the agents to be successful if they want to survive.
+    `rent` substracts an amount from the agent's "account"
+
+    `horizon` the rest starts growing linearly and reaches the global maxima after `horizon`
+        iterations
+
+    `era` resets the rent every `era` iterations to avoid killing too many agents
+    """
     # XXX add tests for manachhhher and brain
     decision_log = []
     dead = []
@@ -228,7 +249,7 @@ def simulation(manager, generation, rent=True):
 
         agent.money += fitness(agent.dataset, agent.index, act)
         if rent:
-            agent.money -= min(generation / 300, 1)
+            agent.money -= min((generation % 1000) / 300, 1)
         if agent.money < 0:
             dead.append(agent)
 
@@ -241,4 +262,5 @@ def simulation(manager, generation, rent=True):
         "population": len(manager.personnel),
         "generation": generation,
         "avg_wealth": manager.avg_wealth(),
+        "dead": len(dead),
     }

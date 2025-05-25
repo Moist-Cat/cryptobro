@@ -5,11 +5,6 @@ import numpy as np
 from agent.brain import Brain
 from agent.config import PARAM_SPACE
 
-# we don't set something like "max number of rules"
-# i.e. cognitive capacity here or memory because
-#
-# location, lambda
-
 
 def _random_gene(param_space=PARAM_SPACE):
     def handle_int(location, lmd):
@@ -21,7 +16,7 @@ def _random_gene(param_space=PARAM_SPACE):
     )
 
 
-def mutate(dna, mutation_rate=0.05):
+def mutate(dna, mutation_rate=0.1):
     # Apply Gaussian noise to random genes
     mask = np.random.rand(*dna.shape) < mutation_rate
     dna[mask] += dna[mask] * np.random.normal(0, 0.1, size=np.sum(mask))
@@ -31,6 +26,8 @@ def mutate(dna, mutation_rate=0.05):
 
 def biased_crossover(parents, init_agents, init_money):
     """Evolutionary crossover with cognitive experience transfer"""
+    if len(parents) < 2:
+        return []
     # Calculate selection probabilities based on capital
     capitals = np.array([a.money for a in parents])
     selection_probs = capitals / np.sum(capitals)

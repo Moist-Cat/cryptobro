@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.collections import PatchCollection
+import scipy
 from scipy.stats import (
     norm,
     kstest,
@@ -516,6 +517,9 @@ def agents_section():
 
         with control_cols[2]:
             if st.button("🏃♂️ Run Full Simulation"):
+                # random variable to auto cross when necessary
+                e = scipy.stats.expon(0, 1)
+
                 progress = st.progress(0)
                 current_gen = len(st.session_state.logs)
 
@@ -528,7 +532,13 @@ def agents_section():
                     current_gen += 1
                     progress.progress(current_gen / max_generations)
 
-                    if len(st.session_state.manager.agents) <= 2 and auto_cross:
+
+                    # As the individuals of the species perish
+                    # the probability of auto_cross triggering increases
+                    alpha = 1 - len(st.session_state.manager.agents)/init_agents
+                    interval = e.interval(alpha)
+                    val = e.rvs()
+                    if log['dead'] and auto_cross and (val > interval[0] and val < interval[1]):
                         agents = st.session_state.manager.agents
                         children = gene.biased_crossover(agents, init_agents, init_cash)
                         for child in children:
