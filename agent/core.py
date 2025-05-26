@@ -79,7 +79,8 @@ class Agent:
         else:
             # the last index is the thesis of the rule
             # or higher-order rule
-            evaluation = fitness(dataset, index, action[-1])
+            # XXX tied to _evaluate_cot
+            evaluation = fitness(dataset, index, action[self.brain.size:].prod())
 
         action_signature = tuple(action)
 
