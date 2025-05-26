@@ -19,7 +19,7 @@ PARAM_SPACE = {
     # "long_term_memory": (10, 1),
     # "similarity_threshold": (0.3, 0.1),
     # "similarity_threshold": (0.95, 0.0),
-    "similarity_threshold": (0.9, 0.0),
+    "similarity_threshold": (0.95, 0.0),
 }
 
 # in order

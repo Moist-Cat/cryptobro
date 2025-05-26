@@ -50,23 +50,17 @@ class Brain:
     ):
         self.dna = genes
         self.size = size
-        self.memory = np.zeros((int(self.dna[PARAMS["memory"]]), size))
+        self.memory = np.zeros((int(self.dna[PARAMS["long_term_memory"]]), size))
         self._short_term_free = 0
         # We record how old is the memory to be able to
         # see which memory could be less relevant
-        self.memory_age = np.zeros(int(self.dna[PARAMS["memory"]]))
+        self.memory_age = np.zeros(int(self.dna[PARAMS["long_term_memory"]]))
         self.current_index = 0
 
 
         self.long_term_memory = PCA(
             n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
         )
-        self._long_term_raw = np.zeros(
-            (int(self.dna[PARAMS["long_term_memory"]]), size)
-        )
-        self._long_term_free = 0
-
-        self._reconstruction_error = None
 
         self.parent = parent
         self.child = child
@@ -77,13 +71,10 @@ class Brain:
         Discard the least significant item from memory given it's full
         """
         minima = float("inf")
-        minima_idx = self._long_term_free
+        minima_idx = 0
         for idx, v in enumerate(memory):
             # refcount
-            try:
-                _, count = self.agent.evaluate(v)
-            except:
-                breakpoint()
+            _, count = self.agent.evaluate(v)
             age = self.current_index - self.memory_age[idx]
             # +1 for each time we iterate the whole moemory
             relevancy = count - (age//len(memory))
@@ -97,17 +88,11 @@ class Brain:
 
     @property
     def memory_full(self):
-        if len(self.memory) > 100:
-            return self.memory[100].any()
-        return self.memory_overflow
+        return self.memory[int(self.dna[PARAMS["memory"]])].any()
 
     @property
     def memory_overflow(self):
         return self.memory[-1].any()
-
-    @property
-    def long_term_overflow(self):
-        return self._long_term_raw[-1].any()
 
     def remember(self, information):
         self.memory[self._short_term_free] = information
@@ -123,14 +108,6 @@ class Brain:
                 self._short_term_free = 0
         self.current_index += 1
 
-    def remember_long_term(self, information):
-        self._long_term_raw[self._long_term_free] = information
-
-        # In principle, the long_term_memory should never overflow
-        self._long_term_free += 1
-        if self._long_term_free >= len(self._long_term_raw):
-            self._long_term_free = 0
-
     def comprehend(self, information):
         """
           We use PCA to 'comprehend' the information as a whole
@@ -139,7 +116,11 @@ class Brain:
          Returns true if the vector was "learned" and false
         if it was "understood" using the existent orthogonal basis
         """
-        self.remember(information)
+
+        # hack to avoid redundancy during the first iterations
+        vector = (self.memory == information).prod(axis=1)
+        if not vector.any() and not self.memory_full:
+            self.remember(information)
 
         if not self.memory_full:
             # We still don't have enough information
@@ -157,30 +138,22 @@ class Brain:
         # the information presented to us
         if not hasattr(self.long_term_memory, "components_"):
             # empty, great
-            try:
-                self.long_term_memory.fit(self.memory)
-            except Exception as exc:
-                raise
-            max_mem = min(len(self._long_term_raw), len(self.memory))
-            for i in range(0, max_mem):
-                self.remember_long_term(self.memory[i])
+            self.long_term_memory.fit(self.memory)
 
-        # New vector (ensure it's centered using the training mean!)
-        vector_centered = information - self.long_term_memory.mean_
-        error = calculate_reconstruction_error(self.long_term_memory, vector_centered)
+        # avoid adding information that looks like what we already have
+        error = self.compare(information)
+        similarity_scores = error[0]
+        if not similarity_scores.any():
+            return False
+        similarity = similarity_scores.max()
+        # i.e. new information
+        if similarity > 0.95:
+            return False
 
-        # print(error, self._reconstruction_error)
-        if not self._reconstruction_error:
-            self._reconstruction_error = np.percentile(
-                calculate_reconstruction_error(
-                    self.long_term_memory, self._long_term_raw
-                ),
-                self.dna[PARAMS["pca_error_tolerance"]],
-            )
+        self.remember(information)
 
-        # small errors (i.e. 5 percentile) are not relevant
-        # because that means the vector was fully comprehended!
-        if error < self._reconstruction_error:
+        if similarity > self.dna[PARAMS["pca_error_tolerance"]]:
+            # no need to recalculate PCA for every small thing
             return False
 
         # Outlier detected
@@ -191,16 +164,12 @@ class Brain:
         # 4. Any of the above with weights to prioritize new
         #  information
 
-        self.remember_long_term(information)
-
         # repeated code
+        print("INFO - Updating long_term_memory")
         self.long_term_memory = PCA(
             n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
         )
-        self.long_term_memory.fit(self._long_term_raw)
-        # invalidate cache
-        self._reconstruction_error = None
-
+        self.long_term_memory.fit(self.memory)
         return True
 
     def compare(self, information):
@@ -227,6 +196,10 @@ class Brain:
             # The cluster is the raw memory
             # we need it to evaluate the results later
             cluster = self.memory[closest_indices]
+            # update memory age
+            #
+            # self.memory_age += valid_mask.reshape(1, -1) # might be a valid alternative
+            self.memory_age[valid_indices] = self.current_index
         else:
             closest_indices = np.array([], dtype=int)
             closest_scores = np.array([])
@@ -248,11 +221,10 @@ class Brain:
         weight = 1
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
-            #evaluations[i] = (
-            #    evaluation * weight * penalize_young(count, desired_count=5)
-            #)
+            evaluations[i] = (
+                evaluation * weight * penalize_young(count, desired_count=5)
+            )
             evaluations[i] = evaluation
-
         # take the closeness into consideration
         # return np.dot(evaluations, sim_scores)[0]
         #
@@ -263,9 +235,26 @@ class Brain:
         elif (evaluations < 0).all():
             return -1
         else:
-            return 0
-        # print(evaluations)
-        # return evaluations.mean()
+            mini = evaluations.min()
+            maxim = evaluations.max()
+            med = np.median(evaluations)
+
+            if maxim == mini:
+                return np.sign(maxim)
+            elif np.sign(maxim) == np.sign(mini):
+                return np.sign(maxim)
+            return np.sign(med)
+
+            # if they don't have the same sign
+            # maxim is positive and mini is negative
+            # let's calculate the percentile of the
+            # median of the values
+
+            # [0, 1]
+            #p_med = (med - mini)/(maxim - mini)
+            #p_zero = (0 - mini)/(maxim - mini)
+
+            #return (p_med - p_zero)*2
 
     def create(self, hypothesis, evaluation):
         """
@@ -318,8 +307,8 @@ class Brain:
         return parent_feedback + [rule[-1]]
 
     def _create_parent(self, seed):
-        #if self.child and self.child.child:
-        if self.child:
+        if self.child and self.child.child:
+        #if self.child:
             # avoid adding too many levels of nesting
             return None
         brain = Brain(genes=self.dna, size=len(seed), agent=self.agent, child=self)
@@ -330,9 +319,8 @@ class Brain:
 
     def _evaluate_cot(self, cot):
         # return np.array(cot).mean()
-        print(cot)
         p = np.array(cot).prod()
-        print(p)
+        print(cot)
         return p
         # if not p:
         #    return np.array(cot).mean()

@@ -561,26 +561,7 @@ def agents_section():
             st.metric("Current Population", len(st.session_state.manager.agents))
         with metric_cols[1]:
             avg_money = st.session_state.manager.avg_wealth()
-
-            st.metric("Average Capital", f"${avg_money:,.2f}")
-        with metric_cols[2]:
-            avg_earnings = np.array(
-                list(
-                    np.array(
-                        list(
-                            map(
-                                lambda a: a["evaluation"],
-                                st.session_state.manager.personnel[agent].values(),
-                            )
-                        )
-                    ).mean()
-                    for agent in st.session_state.manager.agents
-                )
-            )
-            st.metric(
-                "Average Success Rate",
-                f"{avg_earnings.mean():.2}",
-            )
+            st.metric("Average Capital", f"{avg_money:.2f}")
 
         with metric_cols[3]:
             st.metric("Generation", len(st.session_state.logs))
@@ -616,28 +597,11 @@ def agents_section():
                     st.json(tuple(agent.brain.dna))
                 with col2:
                     st.write("**Trading Stats**")
-                    if st.session_state.manager.personnel[agent]:
-                        earnings = np.array(
-                            list(
-                                map(
-                                    lambda a: a["evaluation"],
-                                    st.session_state.manager.personnel[agent].values(),
-                                )
-                            )
-                        )
-                        st.metric(
-                            "Success Rate",
-                            f"{np.flatnonzero(earnings > 0).size/earnings.size:.2%}",
-                        )
-                        st.metric("Average Earnings", f"{earnings.mean():.2}")
-                        st.metric("STDev Earnings", f"{earnings.std():.2}")
-                        st.metric("Min Earnings", f"{earnings.min():.2}")
-                        st.metric("Max Earnings", f"{earnings.max():.2}")
 
         # Gene statistics
         st.subheader("🧬 Population Gene Distribution")
         gene_df = pd.DataFrame(
-            [agent.brain.dna for agent in st.session_state.manager.personnel]
+            [agent.brain.dna for agent in st.session_state.manager.agents]
         )
         if st.session_state.manager.agents:
             st.dataframe(gene_df.describe())
@@ -915,7 +879,7 @@ def main():
         """
         )
 
-        if st.button("Run once with alpha"):
+        if st.button("Run once"):
             state, logs = general_policy(
                 prices[:number_of_days],
                 state=start_state,

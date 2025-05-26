@@ -48,7 +48,7 @@ def biased_crossover(parents, init_agents, init_money):
 
         # Experience transfer using fitness-weighted memory
         for parent in [p1, p2]:
-            for mem in parent.brain._long_term_raw:
+            for mem in parent.brain.memory:
                 if random.random() < 0.2:
                     child_brain.comprehend(mem)
 

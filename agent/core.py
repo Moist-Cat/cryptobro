@@ -38,6 +38,7 @@ def save_agent(agent, path=MODEL_PATH):
     return save_object(agent)
 
 
+# XXX maybe do lru cache once we get too much data
 class Agent:
     def __init__(self, brain=None, init_money=100, dataset=None, index=None):
         self.name = random.choice(historical_figures)
@@ -52,6 +53,7 @@ class Agent:
 
         self.dataset = dataset
         self.index = index
+        self.evaluations = {}
 
         self.manager = None
         self.brain = brain or Brain(_random_gene(), len(_get_state(dataset, index)))
@@ -60,11 +62,78 @@ class Agent:
     def decide(self, information: "np.array"):
         return self.brain.decide(information)
 
-    def remember(self, action):
-        return self.manager.remember(self, action)
+    def remember(self, action: "np.array"):
+        index = self.index
+        dataset = self.dataset
+
+        if len(action.shape) > 1:
+            raise Exception(
+                f"Invalid dimension for parameter for the fitness function for {action}"
+            )
+
+        if action.shape[0] == self.brain.size:
+            # special case
+            # it's just the status
+            # there is nothing to evaluate
+            evaluation = 0
+        else:
+            # the last index is the thesis of the rule
+            # or higher-order rule
+            evaluation = fitness(dataset, index, action[-1])
+
+        action_signature = tuple(action)
+
+        act = action_signature in self.evaluations
+        if act:
+            metadata = self.evaluations[action_signature]
+            cum = self.evaluations[action_signature]["cum"] = (
+                metadata["evaluation"] + evaluation
+            )
+            self.evaluations[action_signature]["count"] += 1
+            cnt = self.evaluations[action_signature]["count"]
+
+            self.evaluations[action_signature]["evaluation"] = cum / cnt
+            print("Count:", cnt)
+        else:
+            self.evaluations[action_signature] = {
+                "evaluation": evaluation,
+                "cum": evaluation,
+                "count": 1,
+            }
+        self.evaluations[action_signature]["day"] = index
+        self.evaluations[action_signature]["dataset"] = dataset
+
+        self.evaluations[action_signature]["evaluation"] = evaluation
+
+        # for debug/test purposes
+        # don't cheat during backtest!
+        return evaluation
 
     def evaluate(self, action):
-        return self.manager.evaluate(self, action)
+        action_signature = tuple(action)
+        if not action_signature in self.evaluations:
+            return 0, 1
+
+        day = self.evaluations[action_signature]["day"]
+        act_dataset = self.evaluations[action_signature]["dataset"]
+        # current
+        dataset = self.dataset
+        index = self.index
+
+        # compares dataset's references
+        if day + EVAL_WINDOW > index and (id(dataset) == id(act_dataset)):
+            # lookahead!
+            # A way to avoid is is never allowing
+            # the agent to predict something that
+            # will happen in less than 5 days
+            return 0, 1
+
+        self.evaluations[action_signature]["evaluation"]
+
+        return (
+            self.evaluations[action_signature]["evaluation"],
+            self.evaluations[action_signature]["count"],
+        )
 
     def get_state(self):
         return _get_state(self.dataset, self.index)
@@ -77,98 +146,19 @@ class Agent:
             self.index = index
 
 
-# XXX maybe do lru cache once we get too much data
 class Manager:
     def __init__(self, agents, data_size):
-        self.personnel = {}
         self.agents = []
-        self.data_size = data_size
 
         for agent in agents:
             self.report(agent)
 
     def kill(self, agent):
         self.agents.remove(agent)
-        del self.personnel[agent]
 
     def report(self, agent):
         agent.manager = self
-        self.personnel[agent] = {}
         self.agents.append(agent)
-
-    def remember(self, agent, action: "np.array"):
-        index = agent.index
-        dataset = agent.dataset
-
-        if len(action.shape) > 1:
-            raise Exception(
-                f"Invalid dimension for parameter for the fitness function for {action}"
-            )
-
-        if action.shape[0] == self.data_size:
-            # special case
-            # it's just the status
-            # there is nothing to evaluate
-            evaluation = 0
-        else:
-            # the last index is the thesis of the rule
-            # or higher-order rule
-            evaluation = fitness(dataset, index, action[-1])
-
-        action_signature = tuple(action)
-
-        act = action_signature in self.personnel[agent]
-        if act:
-            metadata = self.personnel[agent][action_signature]
-            cum = self.personnel[agent][action_signature]["cum"] = (
-                metadata["evaluation"] + evaluation
-            )
-            self.personnel[agent][action_signature]["count"] += 1
-            cnt = self.personnel[agent][action_signature]["count"]
-
-            print("INFO - Count", cnt)
-
-            self.personnel[agent][action_signature]["evaluation"] = cum / cnt
-        else:
-            self.personnel[agent][action_signature] = {
-                "evaluation": evaluation,
-                "cum": evaluation,
-                "count": 1,
-            }
-        self.personnel[agent][action_signature]["day"] = index
-        self.personnel[agent][action_signature]["dataset"] = dataset
-
-        self.personnel[agent][action_signature]["evaluation"] = evaluation
-
-        # for debug/test purposes
-        # don't cheat during backtest!
-        return evaluation
-
-    def evaluate(self, agent, action):
-        action_signature = tuple(action)
-        if not action_signature in self.personnel[agent]:
-            return 0, 1
-
-        day = self.personnel[agent][action_signature]["day"]
-        act_dataset = self.personnel[agent][action_signature]["dataset"]
-        # current
-        dataset = agent.dataset
-        index = agent.index
-
-        # compares dataset's references
-        if day + EVAL_WINDOW > index and (id(dataset) == id(act_dataset)):
-            # lookahead!
-            # A way to avoid is is never allowing
-            # the agent to predict something that
-            # will happen in less than 5 days
-            return 0, 1
-
-        self.personnel[agent][action_signature]["evaluation"]
-
-        return (
-            self.personnel[agent][action_signature]["evaluation"],
-            self.personnel[agent][action_signature]["count"],
-        )
 
     # utility
     def avg_wealth(self):
@@ -222,7 +212,7 @@ def _get_state(dataset, index):
         (
             # _get_prices(dataset, index),
             [],
-            _get_rsi(dataset, index, [7, 14, 30, 90, 360]),
+            _get_rsi(dataset, index, [5, 15, 30, 120, 240, 480]),
         )
     )
 
@@ -259,7 +249,7 @@ def simulation(manager, generation, rent=True, horizon=300, era=1000):
         manager.kill(agent)
 
     return {
-        "population": len(manager.personnel),
+        "population": len(manager.agents),
         "generation": generation,
         "avg_wealth": manager.avg_wealth(),
         "dead": len(dead),
