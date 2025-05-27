@@ -67,7 +67,7 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = 1
+        self.MAX_CHILDREN = 3
 
     def discard_least_important(self, memory):
         """
@@ -150,13 +150,14 @@ class Brain:
             return False
         similarity = similarity_scores.max()
         # i.e. new information
-        if similarity > 0.95:
+        if similarity > 0.99:
             return False
 
-        print(self.memory)
+        #print(self.memory)
 
         self.remember(information)
 
+        print(similarity)
         if similarity > self.dna[PARAMS["pca_error_tolerance"]]:
             # no need to recalculate PCA for every small thing
             return False
@@ -252,32 +253,29 @@ class Brain:
         # return np.dot(evaluations, sim_scores)[0]
         #
         # k-nn
-        if (evaluations > 0).all():
-            return 1
-        elif (evaluations < 0).all():
-            return -1
-        else:
-            #if not self._max_depth_reached:
-            mini = evaluations.min()
-            maxim = evaluations.max()
-            med = np.median(evaluations)
+        #if (evaluations > 0).all():
+        #    return 1
+        #elif (evaluations < 0).all():
+        #    return -1
+        #else:
+        mini = evaluations.min()
+        maxim = evaluations.max()
+        med = np.median(evaluations)
 
-            if maxim == mini:
-                return np.sign(maxim)
-            elif np.sign(maxim) == np.sign(mini):
-                return np.sign(maxim)
-            return np.sign(med)
+        if maxim == mini:
+            return np.sign(maxim)
 
-            # if they don't have the same sign
-            # maxim is positive and mini is negative
-            # let's calculate the percentile of the
-            # median of the values
+        if self._max_depth_reached and False:
+            return med
 
-            # [0, 1]
-            p_med = (med - mini)/(maxim - mini)
-            p_zero = (0 - mini)/(maxim - mini)
+        elif np.sign(maxim) == np.sign(mini):
+            return np.sign(maxim)
+        return np.sign(med)
 
-            return (p_med - p_zero)*2
+        # if they don't have the same sign
+        # maxim is positive and mini is negative
+        # let's calculate the percentile of the
+        # median of the values
 
     def create(self, hypothesis, evaluation):
         """

@@ -2,9 +2,9 @@ EVAL_WINDOW = 7
 
 PARAM_SPACE = {
     # abstraction power
-    "pca_components": (3, 0),
+    "pca_components": (6, 0),
     # "pca_components": (4, 1),
-    "pca_error_tolerance": (0.95, 0),
+    "pca_error_tolerance": (0.98, 0),
     # regardless of the level
     # how much information can the
     # individual can retain?
@@ -18,7 +18,7 @@ PARAM_SPACE = {
     # "long_term_memory": (10, 1),
     # "similarity_threshold": (0.3, 0.1),
     # "similarity_threshold": (0.95, 0.0),
-    "similarity_threshold": (0.95, 0.0),
+    "similarity_threshold": (0.999, 0.0),
 }
 
 # in order
