@@ -80,7 +80,7 @@ class Agent:
             # the last index is the thesis of the rule
             # or higher-order rule
             # XXX tied to _evaluate_cot
-            evaluation = fitness(dataset, index, action[self.brain.size:].prod())
+            evaluation = fitness(dataset, index, action[self.brain.size :].prod())
 
         action_signature = tuple(action)
 
@@ -189,10 +189,10 @@ def _get_prices(dataset, index, days=EVAL_WINDOW):
     """
     Returns a numpy array with the prices for the last `days` days.
     """
-    start, end = max(0, index - (EVAL_WINDOW + 1)), index
+    start, end = max(0, index - (days + 1)), index
 
     rt = get_log_ratios(dataset[start:end])
-    res = np.concatenate((np.zeros(EVAL_WINDOW - len(rt)), rt))
+    res = np.concatenate((np.zeros(days - len(rt)), rt))
 
     return res
 
@@ -202,7 +202,7 @@ def _get_rsi(dataset, index, days=None):
     return np.array(
         [
             (calculate_rsi(dataset, index, period=day)) // 20
-            #(calculate_rsi(dataset, index, period=day)) // 10
+            # (calculate_rsi(dataset, index, period=day)) // 10
             for day in days
         ]
     )
@@ -211,9 +211,9 @@ def _get_rsi(dataset, index, days=None):
 def _get_state(dataset, index):
     return np.concatenate(
         (
-             _get_prices(dataset, index),
-            #[],
-            #_get_rsi(dataset, index, [5, 15, 30, 120, 240, 480]),
+            _get_prices(dataset, index),
+            # [],
+            # _get_rsi(dataset, index, [5, 15, 30, 120, 240, 480]),
         )
     )
 

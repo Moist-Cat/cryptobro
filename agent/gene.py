@@ -7,12 +7,12 @@ from agent.config import PARAM_SPACE
 
 
 def _random_gene(param_space=PARAM_SPACE):
-    def handle_int(location, lmd):
-        e = np.random.exponential(lmd)
-        return location + e
+    def handle_int(lower, upper):
+        u = np.random.uniform(lower, upper)
+        return u
 
     return np.array(
-        [handle_int(location, lmd) for (location, lmd) in param_space.values()]
+        [handle_int(lower, upper) for (lower, upper) in param_space.values()]
     )
 
 
@@ -38,10 +38,12 @@ def biased_crossover(parents, init_agents, init_money):
         p1, p2 = np.random.choice(parents, 2, p=selection_probs, replace=False)
 
         # Create child with blended DNA
+        # give more importance to parents with more money (more successful)
         child_dna = (p1.brain.dna * p1.money + p2.brain.dna * p2.money) / (
             p1.money + p2.money
         )
         child_dna = mutate(child_dna, mutation_rate=np.std([p1.money, p2.money]))
+        print(np.std([p1.money, p2.money]))
 
         # Inherit hierarchical cognitive structures
         child_brain = Brain(genes=child_dna, size=p1.brain.size)

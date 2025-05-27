@@ -216,8 +216,6 @@ def general_policy(
     state,
     risk,
     policy,
-    orders=True,
-    concurrent_orders=True,
     reverse_strategy=False,
     auto_close=7,
 ):
@@ -230,10 +228,6 @@ def general_policy(
 
     This is a function that decides what to do when executing an action.
     Modifies the state and returns None.
-
-    `orders` enables or disables stop-loss and take-profit
-
-    `concurrent_orders` enables or disables concurrent orders (if we should wait when we have an order up)
 
     `auto_close` Closes a stale order after `auto_close` days. The CIs are calculated using this value so be careful.
 
@@ -251,31 +245,19 @@ def general_policy(
     # (index (completed), price, order)
     # where order is a tuple with
     # (TYPE, upper_bound, lower_bound, index (issues))
-    current_order = -auto_close
     for index in tqdm(range(len(prices))):
         price = prices[index]
-
-        # we can't place another order if we
-        # already have an order placed
-        if (current_order + auto_close >= index) and concurrent_orders:
-            action_log.append(WAIT)
-            health = _net_worth(prices, state, index)
-            net_log.append(health)
-            continue
 
         res = policy(prices, index, risk, action_log)
         action = res["action"]
         if reverse_strategy:
             # no funny bitwise business was posssible *sob*
             action = -action
+
         _extract_logs(policy_logs, res["logs"])
 
         action_log.append(action)
-        if orders:
-            # state["capital"] += action * calculate_profit(
-            #    prices, index, auto_close, risk
-            # )
-            state["capital"] += evaluate.fitness(prices, index, action, auto_close)
+        state["capital"] += evaluate.fitness(prices, index, action, auto_close)
 
         health = _net_worth(prices, state, index)
         net_log.append(health)

@@ -50,24 +50,21 @@ class Brain:
     ):
         self.dna = genes
         self.size = size
-        self.memory = np.zeros((int(self.dna[PARAMS["long_term_memory"]]), size))
+        self.memory = np.zeros((int(self.dna[PARAMS["memory"]]), size))
         self._short_term_free = 0
         # We record how old is the memory to be able to
         # see which memory could be less relevant
-        self.memory_age = np.zeros(int(self.dna[PARAMS["long_term_memory"]]))
+        self.memory_age = np.zeros(int(self.dna[PARAMS["memory"]]))
         self.current_index = 0
 
-
-        self.long_term_memory = PCA(
-            n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
-        )
+        self.long_term_memory = None
 
         self.parent = parent
         self.child = child
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = 3
+        self.MAX_CHILDREN = 1
 
     def discard_least_important(self, memory):
         """
@@ -80,29 +77,25 @@ class Brain:
             _, count = self.agent.evaluate(v)
             age = self.current_index - self.memory_age[idx]
             # +1 for each time we iterate the whole moemory
-            relevancy = count - (age//len(memory))
+            relevancy = count - (age / len(memory))
             if relevancy < minima:
                 minima_idx = idx
-                minima = count
+                minima = relevancy
 
-        print(f"{minima=}")
+        #print(f"{minima=}")
 
         return minima_idx
 
     @property
     def memory_full(self):
-        return self.memory[int(self.dna[PARAMS["memory"]])].any()
-
-    @property
-    def memory_overflow(self):
         return self.memory[-1].any()
 
     def remember(self, information):
         self.memory[self._short_term_free] = information
         self.memory_age[self._short_term_free] = self.current_index
 
-        if self.memory_overflow:
-           self._short_term_free = self.discard_least_important(
+        if self.memory_full:
+            self._short_term_free = self.discard_least_important(
                 self.memory,
             )
         else:
@@ -141,7 +134,12 @@ class Brain:
         # the information presented to us
         if not hasattr(self.long_term_memory, "components_"):
             # empty, great
-            self.long_term_memory.fit(self.memory)
+            print("INFO - Memory full. Feeding PCA with the memory")
+
+        self.long_term_memory = PCA(
+            n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
+        )
+        self.long_term_memory.fit(self.memory)
 
         # avoid adding information that looks like what we already have
         error = self.compare(information)
@@ -150,18 +148,14 @@ class Brain:
             return False
         similarity = similarity_scores.max()
         # i.e. new information
-        if similarity > 0.99:
-            return False
+        # if similarity > 0.99:
+        #    return False
 
         #print(self.memory)
 
         self.remember(information)
 
-        print(similarity)
-        if similarity > self.dna[PARAMS["pca_error_tolerance"]]:
-            # no need to recalculate PCA for every small thing
-            return False
-
+        # XXX we ingnore outliers now
         # Outlier detected
         # Here might take different approaches to fit new data
         # 1. Incremental SVD
@@ -171,11 +165,6 @@ class Brain:
         #  information
 
         # repeated code
-        print("INFO - Updating long_term_memory")
-        self.long_term_memory = PCA(
-            n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
-        )
-        self.long_term_memory.fit(self.memory)
         return True
 
     def compare(self, information):
@@ -228,7 +217,8 @@ class Brain:
 
     def _experiment(self):
         if not self._max_depth_reached:
-            return random.choice((-1, 1))
+            return 1
+            # return random.choice((-1, 1))
         return 0
 
     def evaluate(self, cluster, sim_scores):
@@ -245,37 +235,38 @@ class Brain:
         weight = 1
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
-            #evaluations[i] = (
+            # evaluations[i] = (
             #    evaluation * weight * penalize_young(count + 1, desired_count=30)
-            #)
+            # )
             evaluations[i] = evaluation
         # take the closeness into consideration
         # return np.dot(evaluations, sim_scores)[0]
         #
         # k-nn
-        #if (evaluations > 0).all():
+        # if (evaluations > 0).all():
         #    return 1
-        #elif (evaluations < 0).all():
+        # elif (evaluations < 0).all():
         #    return -1
-        #else:
+        # else:
+        # print(cluster)
+        # print(evaluations)
         mini = evaluations.min()
         maxim = evaluations.max()
-        med = np.median(evaluations)
+        # med = np.median(evaluations)
+        med = np.mean(evaluations)
 
         if maxim == mini:
             return np.sign(maxim)
-
-        if self._max_depth_reached and False:
-            return med
-
         elif np.sign(maxim) == np.sign(mini):
             return np.sign(maxim)
+        elif self._max_depth_reached:
+            # zero is in the interval
+            neg = -mini / (maxim - mini)
+            pos = 1 - neg
+            if neg > pos:
+                return -(neg - 0.5) * 2
+            return (pos - 0.5) * 2
         return np.sign(med)
-
-        # if they don't have the same sign
-        # maxim is positive and mini is negative
-        # let's calculate the percentile of the
-        # median of the values
 
     def create(self, hypothesis, evaluation):
         """
@@ -284,7 +275,8 @@ class Brain:
         """
         if evaluation == 0 and not self._max_depth_reached:
             # random if we have no information
-            evaluation = random.choice((1, -1))
+            # evaluation = random.choice((1, -1))
+            evaluation = 1
         # create rule based on current event
         rule = np.concatenate(
             (
@@ -305,7 +297,7 @@ class Brain:
         closest_scores, closest_indices, cluster = self.compare(information)
         evaluation = self.evaluate(cluster, closest_scores)
 
-        #if not cluster.any():
+        # if not cluster.any():
         #    # no idea
         #    return [self._experiment()]
 
@@ -345,7 +337,16 @@ class Brain:
         #    return np.array(cot).mean()
         # return p
 
+    @property
+    def _is_dull(self):
+        return len(self.memory) == 0 or (
+            self.long_term_memory is not None
+            and len(self.long_term_memory.components_) == 0
+        )
+
     def decide(self, information):
+        if self._is_dull:
+            return 0
         chain_of_thought = self.think(information)
 
         self._cot = chain_of_thought
