@@ -63,9 +63,6 @@ def policy_agent(prices, index, risk, history, load=False):
             agent = load_agent()
         else:
             agent = Agent()
-            manager = Manager([agent], agent.brain.size)
-            # evaluation function
-            manager.report(agent)
         GlobalState.agent = agent
 
     agent = GlobalState.agent
@@ -75,6 +72,8 @@ def policy_agent(prices, index, risk, history, load=False):
     agent.index = index
 
     action = agent.decide(agent.get_state())
+    if len(agent.brain._cot) < agent.brain.MAX_CHILDREN + 1:
+        action = WAIT
 
     return {
         "action": action,

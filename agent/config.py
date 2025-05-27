@@ -4,8 +4,7 @@ PARAM_SPACE = {
     # abstraction power
     "pca_components": (3, 0),
     # "pca_components": (4, 1),
-    # Doesn't matter at all LOL (for 3 comp)
-    "pca_error_tolerance": (0.9, 0),
+    "pca_error_tolerance": (0.95, 0),
     # regardless of the level
     # how much information can the
     # individual can retain?

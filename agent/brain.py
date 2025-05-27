@@ -66,6 +66,9 @@ class Brain:
         self.child = child
         self.agent = agent
 
+        self._cot = []
+        self.MAX_CHILDREN = 1
+
     def discard_least_important(self, memory):
         """
         Discard the least significant item from memory given it's full
@@ -150,6 +153,8 @@ class Brain:
         if similarity > 0.95:
             return False
 
+        print(self.memory)
+
         self.remember(information)
 
         if similarity > self.dna[PARAMS["pca_error_tolerance"]]:
@@ -207,6 +212,24 @@ class Brain:
 
         return closest_scores, closest_indices, cluster
 
+    @property
+    def _max_depth_reached(self):
+        """
+        Meaning this is the last layer
+        """
+        children = 0
+        curr = self.child
+        while curr:
+            children += 1
+            curr = curr.child
+
+        return children >= self.MAX_CHILDREN
+
+    def _experiment(self):
+        if not self._max_depth_reached:
+            return random.choice((-1, 1))
+        return 0
+
     def evaluate(self, cluster, sim_scores):
         """
         Evaluate results from lower layers.
@@ -221,20 +244,20 @@ class Brain:
         weight = 1
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
-            evaluations[i] = (
-                evaluation * weight * penalize_young(count, desired_count=5)
-            )
+            #evaluations[i] = (
+            #    evaluation * weight * penalize_young(count + 1, desired_count=30)
+            #)
             evaluations[i] = evaluation
         # take the closeness into consideration
         # return np.dot(evaluations, sim_scores)[0]
         #
         # k-nn
-        #print(evaluations)
         if (evaluations > 0).all():
             return 1
         elif (evaluations < 0).all():
             return -1
         else:
+            #if not self._max_depth_reached:
             mini = evaluations.min()
             maxim = evaluations.max()
             med = np.median(evaluations)
@@ -251,19 +274,18 @@ class Brain:
             # median of the values
 
             # [0, 1]
-            #p_med = (med - mini)/(maxim - mini)
-            #p_zero = (0 - mini)/(maxim - mini)
+            p_med = (med - mini)/(maxim - mini)
+            p_zero = (0 - mini)/(maxim - mini)
 
-            #return (p_med - p_zero)*2
+            return (p_med - p_zero)*2
 
     def create(self, hypothesis, evaluation):
         """
         Generate an hyphothesis (higher-dimension information) based on the information
          currently available, generating new knowledge.
         """
-        if evaluation == 0 and not self.child:
+        if evaluation == 0 and not self._max_depth_reached:
             # random if we have no information
-            # evaluation = 1
             evaluation = random.choice((1, -1))
         # create rule based on current event
         rule = np.concatenate(
@@ -280,14 +302,14 @@ class Brain:
         Upwards backpropagation to think of an action.
         """
         if not self.memory_full:
-            return [0]
+            return [self._experiment()]
 
         closest_scores, closest_indices, cluster = self.compare(information)
         evaluation = self.evaluate(cluster, closest_scores)
 
-        if not cluster.any():
-            # no idea
-            return [0]
+        #if not cluster.any():
+        #    # no idea
+        #    return [self._experiment()]
 
         # print(evaluation, cluster, closest_scores)
         # rule = self.create(cluster.mean(axis=0), evaluation)
@@ -307,8 +329,7 @@ class Brain:
         return parent_feedback + [rule[-1]]
 
     def _create_parent(self, seed):
-        if self.child and self.child.child:
-        #if self.child:
+        if self._max_depth_reached:
             # avoid adding too many levels of nesting
             return None
         brain = Brain(genes=self.dna, size=len(seed), agent=self.agent, child=self)
@@ -328,6 +349,8 @@ class Brain:
 
     def decide(self, information):
         chain_of_thought = self.think(information)
+
+        self._cot = chain_of_thought
 
         if any(chain_of_thought):
             res = self._evaluate_cot(chain_of_thought)

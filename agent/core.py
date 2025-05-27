@@ -211,9 +211,9 @@ def _get_rsi(dataset, index, days=None):
 def _get_state(dataset, index):
     return np.concatenate(
         (
-            # _get_prices(dataset, index),
-            [],
-            _get_rsi(dataset, index, [5, 15, 30, 120, 240, 480]),
+             _get_prices(dataset, index),
+            #[],
+            #_get_rsi(dataset, index, [5, 15, 30, 120, 240, 480]),
         )
     )
 
