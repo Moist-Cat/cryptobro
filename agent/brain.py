@@ -44,6 +44,7 @@ class Brain:
         self,
         genes: "np.array",
         size,
+        layers=None,
         parent: "Brain" = None,
         child: "Brain" = None,
         agent=None,
@@ -64,7 +65,7 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = 1
+        self.MAX_CHILDREN = layers or 2
 
     def discard_least_important(self, memory):
         """
@@ -255,6 +256,8 @@ class Brain:
         # med = np.median(evaluations)
         med = np.mean(evaluations)
 
+        # We might have too little information to make
+        # an informed decision
         if maxim == mini:
             return np.sign(maxim)
         elif np.sign(maxim) == np.sign(mini):
@@ -341,7 +344,7 @@ class Brain:
     def _is_dull(self):
         return len(self.memory) == 0 or (
             self.long_term_memory is not None
-            and len(self.long_term_memory.components_) == 0
+            and min(int(self.dna[PARAMS["pca_components"]]), self.size) == 0
         )
 
     def decide(self, information):

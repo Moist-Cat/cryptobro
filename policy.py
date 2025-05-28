@@ -6,6 +6,7 @@ import random
 from agent import (
     Agent,
     Manager,
+    Brain,
     load_agent,
     evaluate,
 )
@@ -51,7 +52,7 @@ def _extract_logs(logs: dict, log: dict):
         logs[key].append(log[key])
 
 
-def policy_agent(prices, index, risk, history, load=False):
+def policy_agent(prices, index, risk, history, load=False, genes="", size=-1, layers=-1):
     """
     Use the agent.
 
@@ -62,7 +63,13 @@ def policy_agent(prices, index, risk, history, load=False):
         if load:
             agent = load_agent()
         else:
-            agent = Agent()
+            if genes:
+                genes = eval(genes)
+                if not isinstance(genes, list) or not isinstance(genes[0], float):
+                    raise ValueError("The genes should be a list of float")
+                agent = Agent(brain=Brain(genes=genes, size=size, layers=layers))
+            else:
+                agent = Agent()
         GlobalState.agent = agent
 
     agent = GlobalState.agent
