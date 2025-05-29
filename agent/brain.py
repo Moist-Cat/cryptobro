@@ -65,7 +65,8 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = layers or 1
+        self.MAX_CHILDREN = layers or 2
+        print("INFO -", f"{self.MAX_CHILDREN=}")
 
     def discard_least_important(self, memory):
         """
@@ -83,7 +84,7 @@ class Brain:
                 minima_idx = idx
                 minima = relevancy
 
-        #print(f"{minima=}")
+        # print(f"{minima=}")
 
         return minima_idx
 
@@ -152,7 +153,7 @@ class Brain:
         # if similarity > 0.99:
         #    return False
 
-        #print(self.memory)
+        # print(self.memory)
 
         self.remember(information)
 
@@ -186,11 +187,13 @@ class Brain:
         top_k_vector = np.argsort(sim_scores)[-top_vectors]
 
         # truncated-top-k algo
-        similarity_threshold = max(top_k_vector, self.dna[PARAMS["similarity_threshold"]])
+        similarity_threshold = max(
+            top_k_vector, self.dna[PARAMS["similarity_threshold"]]
+        )
         # top-k algo
-        #similarity_threshold = top_k_vector
+        # similarity_threshold = top_k_vector
         # truncated algo
-        #similarity_threshold = self.dna[PARAMS["similarity_threshold"]] # XXX old algo
+        # similarity_threshold = self.dna[PARAMS["similarity_threshold"]] # XXX old algo
 
         valid_mask = sim_scores >= similarity_threshold
         valid_indices = np.flatnonzero(valid_mask)
@@ -334,7 +337,13 @@ class Brain:
         if self._max_depth_reached:
             # avoid adding too many levels of nesting
             return None
-        brain = Brain(genes=self.dna, size=len(seed), agent=self.agent, child=self)
+        brain = Brain(
+            genes=self.dna,
+            size=len(seed),
+            agent=self.agent,
+            child=self,
+            layers=self.MAX_CHILDREN,
+        )
         brain.remember(seed)
         self.agent
 
