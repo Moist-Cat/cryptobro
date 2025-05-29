@@ -201,8 +201,7 @@ if __name__ == "__main__":
         {"symbol": "TONUSDT", "type": CRYPTO},
         {"symbol": "ADAUSDT", "type": CRYPTO},
         {"symbol": "LINKUSDT", "type": CRYPTO},
-    ]
-    _ = [
+
         {"symbol": "NATURAL_GAS", "type": COMMODITIES},
         {"symbol": "BRENT", "type": COMMODITIES},
 

@@ -65,7 +65,7 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = layers or 2
+        self.MAX_CHILDREN = layers or 1
 
     def discard_least_important(self, memory):
         """
@@ -177,24 +177,33 @@ class Brain:
             -1, 1
         )
 
-        similarity_threshold = self.dna[PARAMS["similarity_threshold"]]
+        # top-k
+        top_k = min(max(self.dna[PARAMS["top_k"]], 0), 1)
+        top_vectors = int(top_k * len(self.memory))
+        # get the k biggest vector
+        # Is top_vectors ever bigger than sim_scores?
+        # Spoiler: no
+        top_k_vector = np.argsort(sim_scores)[-top_vectors]
+
+        # truncated-top-k algo
+        similarity_threshold = max(top_k_vector, self.dna[PARAMS["similarity_threshold"]])
+        # top-k algo
+        #similarity_threshold = top_k_vector
+        # truncated algo
+        #similarity_threshold = self.dna[PARAMS["similarity_threshold"]] # XXX old algo
 
         valid_mask = sim_scores >= similarity_threshold
         valid_indices = np.flatnonzero(valid_mask)
 
-        if valid_indices.size > 0:
-            # Get scores for valid entries and sort descendingly
-            # sorted_idx = np.argsort(-sim_scores[valid_indices])
-            # sorted_idx = np.argsort(-sim_scores[valid_indices
-            # closest_indices = valid_indices[sorted_idx]
+        # force to have enough information to make an informed decision
+        print(len(valid_indices), top_vectors)
+        if valid_indices.size > 0 and (len(valid_indices) >= top_vectors):
             closest_indices = valid_indices
             closest_scores = sim_scores[closest_indices]
             # The cluster is the raw memory
             # we need it to evaluate the results later
             cluster = self.memory[closest_indices]
             # update memory age
-            #
-            # self.memory_age += valid_mask.reshape(1, -1) # might be a valid alternative
             self.memory_age[valid_indices] = self.current_index
         else:
             closest_indices = np.array([], dtype=int)
@@ -361,5 +370,8 @@ class Brain:
 
         # update knowledge base with new data
         self.comprehend(information)
+
+        if not not self._max_depth_reached:
+            return 0
 
         return res
