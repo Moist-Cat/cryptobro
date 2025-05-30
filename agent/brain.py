@@ -361,8 +361,7 @@ class Brain:
     @property
     def _is_dull(self):
         return len(self.memory) == 0 or (
-            self.long_term_memory is not None
-            and min(int(self.dna[PARAMS["pca_components"]]), self.size) == 0
+            min(int(self.dna[PARAMS["pca_components"]]), self.size) == 0
         )
 
     def decide(self, information):
@@ -380,7 +379,8 @@ class Brain:
         # update knowledge base with new data
         self.comprehend(information)
 
-        if not not self._max_depth_reached:
+        if len(chain_of_thought) != self.MAX_CHILDREN + 1:
+            # cot is incomplete
             return 0
 
         return res
