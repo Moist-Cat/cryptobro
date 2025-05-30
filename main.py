@@ -537,21 +537,26 @@ def agents_section():
                     alpha = 1 - len(st.session_state.manager.agents) / init_agents
                     interval = e.interval(alpha)
                     val = e.rvs()
+
                     if (
                         log["dead"]
                         and auto_cross
                         and (val > interval[0] and val < interval[1])
                     ):
-                        if len(st.session_state.manager.agents) < 2:
-                            # prevent extinction
-                            for _ in range(2 - len(st.session_state.manager.agents)):
-                                st.session_state.manager.report(
-                                    Agent(init_money=init_cash)
-                                )
                         agents = st.session_state.manager.agents
                         children = gene.biased_crossover(agents, init_agents, init_cash)
                         for child in children:
                             st.session_state.manager.report(child)
+
+                    if (
+                        auto_cross
+                        and (len(st.session_state.manager.agents) <= 2)
+                    ):
+                        # prevent extinction
+                        for _ in range(3 - len(st.session_state.manager.agents)):
+                            st.session_state.manager.report(
+                                core.Agent(init_money=init_cash)
+                            )
         if st.button("Cross"):
             agents = st.session_state.manager.agents
             children = gene.biased_crossover(agents, init_agents, init_cash)

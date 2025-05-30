@@ -47,6 +47,7 @@ def biased_crossover(parents, init_agents, init_money):
 
         # Inherit hierarchical cognitive structures
         child_brain = Brain(genes=child_dna, size=p1.brain.size)
+        child = p1.__class__(brain=child_brain, init_money=init_money)
 
         # Experience transfer using fitness-weighted memory
         for parent in [p1, p2]:
@@ -55,7 +56,6 @@ def biased_crossover(parents, init_agents, init_money):
                     child_brain.comprehend(mem)
 
         # partially initialized blah blah blah
-        child = p1.__class__(brain=child_brain, init_money=init_money)
         children.append(child)
 
     return children
