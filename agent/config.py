@@ -19,25 +19,26 @@ EVAL_WINDOW = 7
 [2.5165012774856943, 137.9934736915067, 0.41931479882617473]
 
 # 2-layer
+# top-k
+
 
 PARAM_SPACE = {
     # abstraction power
-    "pca_components": (1, 1),
+    "pca_components": (4, 4),
     #"pca_components": (2, 7),
     # "pca_components": (1, 3),
-    "memory": (136, 136),
+    "memory": (8, 8),
     #"memory": (5, 100),
     # "memory": (40, 60),
-    # "similarity_threshold": (0.63, 0.63),
+    "similarity_threshold": (0.17, 0.17),
     #"similarity_threshold": (0.0, 1.0),
-    # XXX disabled for now to avoid extreme drawdowns
-    "similarity_threshold": (0.0, 0.0),
+    #"similarity_threshold": (0.0, 0.0),
     # percent of the memory (ceil)
     # The rationale is that we need a general ratio to
     # match it with the memory
     # Yoinking an arbitrary number of vectors isn't easily genera-
     # lizable
-    "top_k": (0.22, 0.22)
+    "top_k": (0.39, 0.39),
     #"top_k": (0.0, 1.0),
     # "similarity_threshold": (0.1, 0.3),
 }

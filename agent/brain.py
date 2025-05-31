@@ -65,8 +65,7 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = layers or 2
-        print("INFO -", f"{self.MAX_CHILDREN=}")
+        self.MAX_CHILDREN = layers or 1
 
     def discard_least_important(self, memory):
         """
@@ -136,7 +135,8 @@ class Brain:
         # the information presented to us
         if not hasattr(self.long_term_memory, "components_"):
             # empty, great
-            print("INFO - Memory full. Feeding PCA with the memory")
+            #print("INFO - Memory full. Feeding PCA with the memory")
+            pass
 
         self.long_term_memory = PCA(
             n_components=min(int(self.dna[PARAMS["pca_components"]]), self.size)
@@ -170,13 +170,15 @@ class Brain:
         return True
 
     def compare(self, information):
+        if not hasattr(self.long_term_memory, "components_"):
+            print("FATAL - Long-term memory is not ready!")
+            return [], [], []
+
         abstract_information = self.long_term_memory.transform(
             information.reshape(1, -1)
         )
         abstract_memory = self.long_term_memory.transform(self.memory)
-        sim_scores = cosine_similarity(abstract_information, abstract_memory).reshape(
-            -1, 1
-        )
+        sim_scores = cosine_similarity(abstract_information, abstract_memory)[0]
 
         # top-k
         top_k = min(max(self.dna[PARAMS["top_k"]], 0), 1)
@@ -185,22 +187,23 @@ class Brain:
         # Is top_vectors ever bigger than sim_scores?
         # Spoiler: no
         top_k_vector = np.argsort(sim_scores)[-top_vectors]
+        top_k_value = sim_scores[top_k_vector]
+
 
         # truncated-top-k algo
         similarity_threshold = max(
-            top_k_vector, self.dna[PARAMS["similarity_threshold"]]
+            top_k_value, self.dna[PARAMS["similarity_threshold"]]
         )
         # top-k algo
         # similarity_threshold = top_k_vector
         # truncated algo
-        # similarity_threshold = self.dna[PARAMS["similarity_threshold"]] # XXX old algo
+        # similarity_threshold = self.dna[PARAMS["similarity_threshold"]]
 
         valid_mask = sim_scores >= similarity_threshold
         valid_indices = np.flatnonzero(valid_mask)
 
         # force to have enough information to make an informed decision
-        print(len(valid_indices), top_vectors)
-        if valid_indices.size > 0 and (len(valid_indices) >= top_vectors):
+        if valid_indices.size > 0:
             closest_indices = valid_indices
             closest_scores = sim_scores[closest_indices]
             # The cluster is the raw memory
@@ -352,7 +355,7 @@ class Brain:
     def _evaluate_cot(self, cot):
         # return np.array(cot).mean()
         p = np.array(cot).prod()
-        print(cot)
+        #print("INFO -", cot)
         return p
         # if not p:
         #    return np.array(cot).mean()
@@ -360,8 +363,10 @@ class Brain:
 
     @property
     def _is_dull(self):
-        return len(self.memory) == 0 or (
-            min(int(self.dna[PARAMS["pca_components"]]), self.size) == 0
+        return (
+            len(self.memory) == 0
+            or min(int(self.dna[PARAMS["pca_components"]]), self.size) == 0
+            or int(self.dna[PARAMS["pca_components"]]) > len(self.memory)
         )
 
     def decide(self, information):

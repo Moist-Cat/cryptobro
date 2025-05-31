@@ -476,7 +476,7 @@ def agents_section():
             mutation_rate = st.slider("Mutation Rate", 0.0, 1.0, 0.05)
             rent = st.checkbox("Enable rent", True)
         with col3:
-            max_generations = st.number_input("Max Generations", 1, 100000, 300)
+            max_generations = st.number_input("Max Generations", 1, 100000, 50000)
             stop_condition = st.selectbox(
                 "Stop Condition", ["Population Size", "Generations"]
             )
@@ -557,6 +557,8 @@ def agents_section():
                             st.session_state.manager.report(
                                 core.Agent(init_money=init_cash)
                             )
+                    if not (current_gen % 1000):
+                        print("INFO - Current DNA:", st.session_state.manager.agents[0].brain.dna)
         if st.button("Cross"):
             agents = st.session_state.manager.agents
             children = gene.biased_crossover(agents, init_agents, init_cash)
