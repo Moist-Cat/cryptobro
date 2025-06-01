@@ -51,6 +51,8 @@ from agent import (
     save_agent,
 )
 
+from retrieval import technical, fundamental
+
 
 def plot_violations(prices, violations, window_size=7):
     """
@@ -451,6 +453,17 @@ def policy_validation_page(logs, prices, window=7):
 # Streamlit App
 # ----------------------
 
+def fundamentals_section():
+    st.header("Fundamental Analysis")
+
+    symbol = st.selectbox("Select symbol", ["SOL", "TRX", "ETH"])
+
+    tech = technical.AssetScraper()
+    fun = fundamental
+
+    if st.button("Run"):
+        filename = DB_DIR / f"{symbol}USDT.csv"
+
 
 def agents_section():
     st.header("🤖 Agent Evolution Simulation")
@@ -473,7 +486,7 @@ def agents_section():
                 20,
                 help="Percentage of top performers to keep",
             )
-            mutation_rate = st.slider("Mutation Rate", 0.0, 1.0, 0.05)
+            mutation_rate = st.slider("Mutation Rate", 0.0, 1.0, 0.3)
             rent = st.checkbox("Enable rent", True)
         with col3:
             max_generations = st.number_input("Max Generations", 1, 100000, 50000)
@@ -544,24 +557,32 @@ def agents_section():
                         and (val > interval[0] and val < interval[1])
                     ):
                         agents = st.session_state.manager.agents
-                        children = gene.biased_crossover(agents, init_agents, init_cash)
+                        children = gene.biased_crossover(
+                            agents, init_agents, init_cash, mutation_rate
+                        )
                         for child in children:
                             st.session_state.manager.report(child)
 
-                    if (
-                        auto_cross
-                        and (len(st.session_state.manager.agents) <= 2)
-                    ):
+                    if auto_cross and (len(st.session_state.manager.agents) <= 2):
+                        print(
+                            "WARNING - The species has gone extinct..."
+                            "using a deux ex machina to continue the epxeriment"
+                        )
                         # prevent extinction
                         for _ in range(3 - len(st.session_state.manager.agents)):
                             st.session_state.manager.report(
                                 core.Agent(init_money=init_cash)
                             )
                     if not (current_gen % 1000):
-                        print("INFO - Current DNA:", st.session_state.manager.agents[0].brain.dna)
+                        print(
+                            "INFO - Current DNA:",
+                            st.session_state.manager.agents[0].brain.dna,
+                        )
         if st.button("Cross"):
             agents = st.session_state.manager.agents
-            children = gene.biased_crossover(agents, init_agents, init_cash)
+            children = gene.biased_crossover(
+                agents, init_agents, init_cash, mutation_rate
+            )
             for child in children:
                 st.session_state.manager.report(child)
         if st.button("Export Agent"):
@@ -674,6 +695,7 @@ def main():
             "CI Evaluation",
             "Policy Experimentation",
             "Agents",
+            "Fundamental",
             "Utils",
         ],
     )
@@ -908,6 +930,8 @@ def main():
             policy_validation_page(logs, prices, days_to_verify)
     elif section == "Agents":
         agents_section()
+    elif section == "Fundamental":
+        fundamental_section()
     elif section == "Utils":
         T = st.number_input("Days (T)", value=350)
 

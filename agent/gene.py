@@ -16,7 +16,7 @@ def _random_gene(param_space=PARAM_SPACE):
     )
 
 
-def mutate(dna, mutation_rate=1):
+def mutate(dna, mutation_rate=0.3):
     # Apply Gaussian noise to random genes
     mask = np.random.rand(*dna.shape) < mutation_rate
     dna[mask] += dna[mask] * np.random.normal(0, 0.1, size=np.sum(mask))
@@ -24,7 +24,7 @@ def mutate(dna, mutation_rate=1):
     return dna
 
 
-def biased_crossover(parents, init_agents, init_money):
+def biased_crossover(parents, init_agents, init_money, mutation_rate=0.3):
     """Evolutionary crossover with cognitive experience transfer"""
     if len(parents) < 2:
         return []
@@ -43,7 +43,7 @@ def biased_crossover(parents, init_agents, init_money):
             p1.money + p2.money
         )
         # XXX wrong mutation rate
-        child_dna = mutate(child_dna, mutation_rate=np.std([p1.money, p2.money]))
+        child_dna = mutate(child_dna)
 
         # Inherit hierarchical cognitive structures
         child_brain = Brain(genes=child_dna, size=p1.brain.size)
@@ -52,7 +52,7 @@ def biased_crossover(parents, init_agents, init_money):
         # Experience transfer using fitness-weighted memory
         for parent in [p1, p2]:
             for mem in parent.brain.memory:
-                if random.random() < 0.2:
+                if random.random() < 0.5:
                     child_brain.comprehend(mem)
 
         # partially initialized blah blah blah

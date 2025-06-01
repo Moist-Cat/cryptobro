@@ -65,7 +65,7 @@ class Brain:
         self.agent = agent
 
         self._cot = []
-        self.MAX_CHILDREN = layers or 1
+        self.MAX_CHILDREN = layers or 2
 
     def discard_least_important(self, memory):
         """
@@ -78,7 +78,8 @@ class Brain:
             _, count = self.agent.evaluate(v)
             age = self.current_index - self.memory_age[idx]
             # +1 for each time we iterate the whole moemory
-            relevancy = count - (age / len(memory))
+            #relevancy = count - (age / len(memory))
+            relevancy = 1 - (age / len(memory))
             if relevancy < minima:
                 minima_idx = idx
                 minima = relevancy
@@ -172,7 +173,7 @@ class Brain:
     def compare(self, information):
         if not hasattr(self.long_term_memory, "components_"):
             print("FATAL - Long-term memory is not ready!")
-            return [], [], []
+            return np.array(([], [], []))
 
         abstract_information = self.long_term_memory.transform(
             information.reshape(1, -1)
@@ -180,24 +181,8 @@ class Brain:
         abstract_memory = self.long_term_memory.transform(self.memory)
         sim_scores = cosine_similarity(abstract_information, abstract_memory)[0]
 
-        # top-k
-        top_k = min(max(self.dna[PARAMS["top_k"]], 0), 1)
-        top_vectors = int(top_k * len(self.memory))
-        # get the k biggest vector
-        # Is top_vectors ever bigger than sim_scores?
-        # Spoiler: no
-        top_k_vector = np.argsort(sim_scores)[-top_vectors]
-        top_k_value = sim_scores[top_k_vector]
-
-
-        # truncated-top-k algo
-        similarity_threshold = max(
-            top_k_value, self.dna[PARAMS["similarity_threshold"]]
-        )
-        # top-k algo
-        # similarity_threshold = top_k_vector
-        # truncated algo
-        # similarity_threshold = self.dna[PARAMS["similarity_threshold"]]
+        # sim-s
+        similarity_threshold = self.dna[PARAMS["similarity_threshold"]]
 
         valid_mask = sim_scores >= similarity_threshold
         valid_indices = np.flatnonzero(valid_mask)
@@ -388,4 +373,6 @@ class Brain:
             # cot is incomplete
             return 0
 
-        return res
+        MOD = 10
+
+        return res*MOD
