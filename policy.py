@@ -53,7 +53,7 @@ def _extract_logs(logs: dict, log: dict):
 
 
 def policy_agent(
-    prices, index, risk, history, load=False, genes="", size=-1, layers=-1
+    prices, index, risk, history, load=False, min_value=-1.0, max_value=1.0, genes="", size=-1, layers=-1
 ):
     """
     Use the agent.
@@ -81,10 +81,12 @@ def policy_agent(
     agent.index = index
 
     action = agent.decide(agent.get_state())
-    if len(agent.brain._cot) < agent.brain.MAX_CHILDREN + 1:
-        action = WAIT
     print("COT:", agent.brain._cot)
     print("Action:", action)
+    if len(agent.brain._cot) < agent.brain.MAX_CHILDREN + 1:
+        action = WAIT
+    if (action > max_value or action < min_value):
+        action = WAIT
 
     return {
         "action": action,

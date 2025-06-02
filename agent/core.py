@@ -94,7 +94,6 @@ class Agent:
             cnt = self.evaluations[action_signature]["count"]
 
             self.evaluations[action_signature]["evaluation"] = cum / cnt
-            print("Count:", cnt)
         else:
             self.evaluations[action_signature] = {
                 "evaluation": evaluation,
@@ -141,7 +140,8 @@ class Agent:
 
     def advance(self):
         self.index += 1
-        if self.index > len(self.dataset):
+        if (self.index > len(self.dataset)) or (random.random() < 0.001):
+            print("INFO - Switching dataset")
             dataset, index = _select_dataset()
             self.dataset = dataset
             self.index = index
