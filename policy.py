@@ -53,7 +53,16 @@ def _extract_logs(logs: dict, log: dict):
 
 
 def policy_agent(
-    prices, index, risk, history, load=False, min_value=-1.0, max_value=1.0, genes="", size=-1, layers=-1
+    prices,
+    index,
+    risk,
+    history,
+    load=False,
+    min_value=-1.0,
+    max_value=1.0,
+    genes="",
+    size=-1,
+    layers=-1,
 ):
     """
     Use the agent.
@@ -85,7 +94,7 @@ def policy_agent(
     print("Action:", action)
     if len(agent.brain._cot) < agent.brain.MAX_CHILDREN + 1:
         action = WAIT
-    if (action > max_value or action < min_value):
+    if action > max_value or action < min_value:
         action = WAIT
 
     return {
@@ -200,6 +209,13 @@ def policy_med(
     }
 
 
+def policy_expected_value(prices, index, risk, history):
+    return {
+        "action": np.sign(estimate_parameters(prices[: index + 1])[1]),
+        "logs": {},
+    }
+
+
 def policy_monkey(prices, index, risk, history, no_wait=False):
     """
     Random. Use this to judge if your policy sucks.
@@ -220,6 +236,7 @@ POLICIES = [
     policy_agent,
     policy_monkey,
     policy_med,
+    policy_expected_value,
     policy_rsi,
 ]
 

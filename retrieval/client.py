@@ -1,6 +1,6 @@
-from retrieval.technical import AssetScraper
+from retrieval.technical import AssetScraper, CRYPTO, COMMODITIES, STOCKS
 
-if __name__ == "__main__":
+def update():
     scraper = AssetScraper()
 
     assets = [
@@ -12,7 +12,6 @@ if __name__ == "__main__":
         {"symbol": "BNBUSDT", "type": CRYPTO},
         {"symbol": "ETHUSDT", "type": CRYPTO},
         {"symbol": "XRPUSDT", "type": CRYPTO},
-        {"symbol": "TONUSDT", "type": CRYPTO},
         {"symbol": "ADAUSDT", "type": CRYPTO},
         {"symbol": "LINKUSDT", "type": CRYPTO},
         {"symbol": "NATURAL_GAS", "type": COMMODITIES},
@@ -31,4 +30,8 @@ if __name__ == "__main__":
     ]
 
     results = scraper.update_assets(assets)
-    print("Update results:", results)
+
+    return results
+
+if __name__ == "__main__":
+    print("Update results:", update())

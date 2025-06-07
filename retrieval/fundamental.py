@@ -2,14 +2,18 @@ import os
 import json
 import requests
 from pathlib import Path
+import pickle
+from functools import cache
 
 # from bs4 import BeautifulSoup
+import pandas as pd
 from datetime import datetime
 from elasticsearch import Elasticsearch
 from typing import Dict, List, Optional
 import hashlib
 
 from meta import DB_DIR
+from retrieval.utils import Model, Document, DIMENSIONS
 
 # --------------------------
 # 1. Asset Metadata Structure
@@ -30,6 +34,10 @@ ASSET_METADATA = {
         "sources": [
             {
                 "type": "github_release",
+                "url": "https://github.com/ethereum/go-ethereum",
+            },
+            {
+                "type": "github_commit",
                 "url": "https://github.com/ethereum/go-ethereum",
             },
             # {
@@ -54,9 +62,95 @@ ASSET_METADATA = {
                 "type": "github_release",
                 "url": "https://github.com/tronprotocol/java-tron",
             },
+            {
+                "type": "github_commit",
+                "url": "https://github.com/tronprotocol/java-tron",
+            },
         ],
     },
 }
+
+
+def transform_cyptopanic(data):
+    return [
+        {
+            "title": item["title"],
+            "published_at": item["published_at"],
+            "content": item["description"],
+        }
+        for item in data["results"]
+    ]
+
+def transform_messari(data):
+    return [
+        {
+            "title": item["title"],
+            "published_at": item["published_at"],
+            "content": item["content"],  # Full article text
+            "tags": item["tags"],  # e.g. ['defi', 'regulation']
+        }
+        for item in data["data"]
+    ]
+
+
+NEWS_SOURCES = {
+    "messari": {
+        "endpoint": "https://data.messari.io/api/v1/news/",
+        "transform": transform_messari,
+        "params": {},
+    },
+    "cyptopanic": {
+        "endpoint": "https://cryptopanic.com/api/developer/v2/posts/",
+        "transform": transform_cyptopanic,
+        "headers": {},
+        "params": {
+            "auth_token": os.getenv("API_CRYPTOPANIC"),
+            "public": "false",
+            "kind": "news",
+            # given during runtime
+            "symbol": "currencies",
+        },
+    },
+}
+
+
+# In-memory cache to reduce load times
+# I don't care if someone published something right after I cached the response
+@cache
+def fetch_news(symbol: str, max_articles=50) -> list:
+    """Fetch news from multiple sources with failover"""
+    results = []
+
+    # Try sources in priority order
+    for source, config in NEWS_SOURCES.items():
+        cfg = config["params"].copy()
+        if not cfg:
+            # assume positional args
+            endpoint = config["endpoint"] + symbol
+        else:
+            endpoint = config["endpoint"]
+        print("INF0 - Fetching news from", endpoint, "...")
+
+        # dynamically set volatile params
+        for k, v in cfg.copy().items():
+            if k in ("symbol", "max_articles"):
+                cfg[cfg.pop(k)] = locals()[k]
+
+        response = requests.get(
+            endpoint,
+            params=cfg,
+        )
+        data = response.json()
+        results.extend(config["transform"](data))
+        if len(results) >= max_articles:
+            print("INFO - Got enough news")
+            break
+
+    if not results:
+        return []
+
+    return sorted(results, key=lambda x: x["published_at"], reverse=True)[:max_articles]
+
 
 # --------------------------
 # 2. Scraping Agent
@@ -77,6 +171,15 @@ class ProtocolScraper:
             "github_release": "id",
             "blog": "published_at",
         }[source]
+
+    def raw_data_filename(self, symbol, source=None):
+        directory = self.storage_path / symbol
+        if source is None:
+            return next(directory.glob("*.json"))
+        return directory / f"{symbol}_{source}".json
+
+    def get_files(self):
+        return self.storage_path.glob("**/*.json")
 
     def fetch_github_commits(self, url: str) -> List[Dict]:
         """Fetch recent commits from GitHub repository"""
@@ -151,20 +254,24 @@ class ProtocolScraper:
 
 class DataProcessor:
     def __init__(self, model=None, es_host: str = "localhost:9200"):
-        self.es = Elasticsearch(
-            os.environ.get("ELASTIC_URL", es_host),
-            ca_certs=os.environ["ELASTIC_CERT"],
-            basic_auth=("elastic", os.environ["ELASTIC_PASSWORD"]),
-        )
-        print(f"INFO - {self.es.info()}")
+        try:
+            self.es = Elasticsearch(
+                os.environ.get("ELASTIC_URL", es_host),
+                ca_certs=os.environ["ELASTIC_CERT"],
+                basic_auth=("elastic", os.environ["ELASTIC_PASSWORD"]),
+            )
+            print(f"INFO - {self.es.info()}")
+        except Exception as exc:
+            print(f"WARNING - Elasticsearch is down ({exc})")
+            self.es = None
         self.index_name = "protocol_updates"
 
         # Initialize text embedding model
-        self.model = model
+        self.model = self.load() or Model()
 
     def create_es_index(self):
         """Create Elasticsearch index with proper mapping"""
-        self.es.indices.create(
+        self.es.options(ignore_status=(400,)).indices.create(
             index=self.index_name,
             body={
                 "mappings": {
@@ -175,33 +282,47 @@ class DataProcessor:
                         "source_type": {"type": "keyword"},
                         "content_vector": {
                             "type": "dense_vector",
-                            "dims": 384,  # Match model dimension
+                            "dims": DIMENSIONS,  # Match model dimension
                         },
                         "metadata": {"type": "object", "enabled": False},
                     }
                 }
             },
         )
-        self.es.options(ignore_status=(400,))
 
     def process_file(self, filepath: str):
         """Process a single raw data file"""
         with open(filepath) as f:
             data = json.load(f)
 
-        symbol = os.path.basename(filepath).split("_")[0]
-        source_type = os.path.basename(filepath).split("_")[1]
+        filename = os.path.basename(filepath)[:-5]
+
+        symbol = filename.split("_")[0]
+        source_type = filename.split("_", maxsplit=1)[1]
 
         # Extract relevant information based on source type
-        if source_type == "github_release":
-            processed = self.process_github_release(data)
-        elif source_type == "github_commit":
-            processed = self.process_github_commit(data)
-        elif source_type == "blog":
-            processed = self.process_blog_data(data)
+        res = []
+        for item in reversed(data):
+            processed = None
+            if source_type == "github_release":
+                processed = self.process_github_release(item)
+            elif source_type == "github_commit":
+                processed = self.process_github_commit(item)
+            elif source_type == "blog":
+                processed = self.process_blog_data(item)
+            else:
+                raise Exception(f"Invalid data type {source_type}")
 
-        return processed
+            res.append(
+                (
+                    datetime.strptime(processed[0].split("T")[0], "%Y-%m-%d"),
+                    processed[1],
+                )
+            )
 
+        return pd.DataFrame(res, columns=("Date", "Content"))
+
+    def send(self, processed):
         # Generate vector embedding
         vector = self.model.encode(processed["content"])
 
@@ -226,20 +347,43 @@ class DataProcessor:
     def process_github_release(self, data: dict) -> dict:
         """Process GitHub commit/release data"""
         # Implement specific parsing logic
-        return {"content": data["body"], "date": data["published_at"]}
+        return data["published_at"], data["body"]
 
     def process_github_commit(self, data: dict) -> dict:
         """Process GitHub commit/release data"""
         # Implement specific parsing logic
-        return {
-            "content": data["commit"]["message"],
-            "date": data["commit"]["committer"]["date"],
-        }
+        return data["commit"]["committer"]["date"], data["commit"]["message"]
 
     def process_blog_data(self, data: dict) -> dict:
         """Process blog post data"""
         # Implement specific parsing logic
-        return {"content": data["content"], "date": data["published_date"]}
+        return data["published_date"], data["content"]
+
+    def save(self):
+        with open("/tmp/lsi_model.pickle", "wb") as file:
+            pickle.dump(self.model, file)
+
+    def load(self):
+        if not Path("/tmp/lsi_model.pickle").exists():
+            return None
+        with open("/tmp/lsi_model.pickle", "rb") as file:
+            return pickle.load(file)
+
+def update():
+    scraper = ProtocolScraper()
+    processor = DataProcessor()
+
+    for symbol in ["BTC", "ETH", "LTC", "SOL", "TRX"]:
+        stored_files = scraper.scrape_asset(symbol)
+    stored_files = scraper.get_files()
+
+    # Process new files
+    data = []
+    for filepath in stored_files:
+        for doc in processor.process_file(filepath).itertuples():
+            data.append(Document(identifier=doc.Date, text=doc.Content))
+    processor.model.fit(data)
+    processor.save()
 
 
 # --------------------------
@@ -250,12 +394,14 @@ if __name__ == "__main__":
     # Initialize components
     scraper = ProtocolScraper()
     processor = DataProcessor()
-    processor.create_es_index()
+    # processor.create_es_index()
 
-    # Scrape and process all assets
-    # for symbol in ["BTC", "ETH", "LTC", "SOL", "TRX"]:
-    #    stored_files = scraper.scrape_asset(symbol)
+    stored_files = scraper.get_files()
 
     # Process new files
-    # for filepath in stored_files:
-    #    processor.process_file(filepath)
+    data = []
+    for filepath in stored_files:
+        for doc in processor.process_file(filepath).itertuples():
+            data.append(Document(identifier=doc.Date, text=doc.Content))
+    processor.model.fit(data)
+    processor.save()

@@ -16,7 +16,7 @@ class AssetScraper:
         self.storage_dir = storage_dir
         os.makedirs(storage_dir, exist_ok=True)
 
-        # Configure data sources (easily extensible)
+        # Configure data sources
         self.sources = {
             CRYPTO: BinanceSource(),
             COMMODITIES: AlphaVantageSource(api_key=os.getenv("API_VANTAGE")),
@@ -179,5 +179,3 @@ class AlphaVantageSource(DataSource):
                 "Close": close,
             }
         )
-
-        return pd.DataFrame()

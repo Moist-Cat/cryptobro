@@ -1,6 +1,9 @@
+import os
+import json
 from pathlib import Path
 import functools
 import inspect
+from datetime import datetime, timedelta, timezone
 
 from scipy.stats import laplace, gennorm, gamma
 
@@ -14,6 +17,35 @@ DIST_NAME = "gennorm"
 BASE_DIR = Path(__file__).parent
 
 DB_DIR = BASE_DIR / "datasets"
+
+SUMMARIZER_ENDPOINT = "http://localhost:5000/summarize"
+
+def update_required(file_paths):
+    """Check if any file was modified yesterday (local time) and trigger update"""
+    if not file_paths:
+        return  # No files to check
+
+    # Get local timezone from system
+    local_tz = datetime.now().astimezone().tzinfo
+
+    # Calculate yesterday in local time
+    current_date = (datetime.now(local_tz)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    # Check all files for modification during yesterday (local time)
+    needs_update = False
+    last_date = current_date
+    for path in file_paths:
+        if not path.exists():
+            continue
+
+        # Get last modified time in UTC
+        mtime = os.path.getmtime(path)
+        modified_utc = datetime.fromtimestamp(mtime, tz=timezone.utc)
+
+        last_date = max(modified_utc, last_date)
+
+    return last_date == current_date
 
 # comfy
 def get_algorithm_params(func):

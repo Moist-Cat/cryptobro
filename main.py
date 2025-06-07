@@ -5,7 +5,10 @@ from collections import Counter
 import concurrent.futures
 import functools
 from pathlib import Path
+from datetime import datetime
 
+import seaborn as sns
+from scipy.stats import chi2_contingency, fisher_exact
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -32,17 +35,25 @@ from utils import (
     estimate_parameters,
     simulate_prices,
     stock_price_ci,
-    mc_ci,
     process_window,
     # autocorr
     find_clusters,
 )
 from meta import (
     load_csv,
+    update_required,
     _configure_algorithm,
     DB_DIR,
     DIST,
     DIST_NAME,
+)
+from chat import (
+    expand_query,
+    lsa_rag_retrieve,
+    summarize_rag_results,
+    summarize_news,
+    assemble_prompt,
+    chatbot,
 )
 
 from agent import (
@@ -52,6 +63,7 @@ from agent import (
 )
 
 from retrieval import technical, fundamental
+from retrieval import client
 
 
 def plot_violations(prices, violations, window_size=7):
@@ -155,6 +167,175 @@ def st_plot_violations(prices, violations, window_size=7):
     st.write(
         f"Total violations: {len(violations)} ({len(violations)/len(prices):.1%} of days)"
     )
+
+
+def display_results(result):
+    """Display chi-square results and confusion matrix"""
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write("### Contingency Table")
+        st.dataframe(result["contingency_table"])
+
+        # Calculate metrics
+        table = result["contingency_table"].values
+        if table.shape == (2, 2):
+            TP = table[1, 1]
+            FP = table[1, 0]
+            FN = table[0, 1]
+            precision = TP / (TP + FP) if TP + FP > 0 else 0
+            recall = TP / (TP + FN) if TP + FN > 0 else 0
+            f1 = (
+                2 * (precision * recall) / (precision + recall)
+                if precision + recall > 0
+                else 0
+            )
+
+            st.write(f"**Precision**: {precision:.2f}")
+            st.write(f"**Recall**: {recall:.2f}")
+            st.write(f"**F1 Score**: {f1:.2f}")
+
+    with col2:
+        st.write("### Chi-Square/Fisher's Test")
+        st.write(f"Odds ratio = {result['odds_ratio']:.2f}")
+        st.write(f"p-value = {result['p_value']:.4f}")
+
+        # Interpret p-value
+        if result["p_value"] < 0.05:
+            st.success("Statistically significant (p < 0.05)")
+        else:
+            st.warning("Not statistically significant (p ≥ 0.05)")
+
+        # Confusion matrix visualization
+        if not result["contingency_table"].empty:
+            plt.figure(figsize=(6, 4))
+            sns.heatmap(result["contingency_table"], annot=True, fmt="d", cmap="Blues")
+            plt.title("Confusion Matrix")
+            st.pyplot(plt)
+
+
+def plot_timeline(price_df):
+    """Visualize price, events, and violations"""
+    plt.figure(figsize=(12, 6))
+
+    # Plot price
+    plt.plot(price_df["Date"], price_df["Close"], label="Price", alpha=0.7)
+
+    # Mark events
+    events = price_df[price_df["event"] == 1]
+    plt.scatter(
+        events["Date"],
+        events["Close"],
+        color="green",
+        marker="^",
+        s=100,
+        label="Protocol Updates",
+    )
+
+    # Mark violations
+    violations = price_df[price_df["violation"] == 1]
+    plt.scatter(
+        violations["Date"],
+        violations["Close"],
+        color="red",
+        marker="x",
+        s=100,
+        label="Price Violations",
+    )
+
+    plt.title(f"Price Timeline with Events and Violations")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    st.pyplot(plt)
+
+
+def run_correlation_analysis(price_df, event_dates, alpha=0.95, n_sim=1000, k=5):
+    """
+    Analyze correlation between events and price violations
+    Returns results for both directions of correlation
+    """
+    # Precompute violations
+    prices = price_df["Close"].values
+    n = len(prices)
+
+    # Compute violations for each window
+    res = validate_ci_coverage(
+        prices,
+        k,
+        alpha,
+        n_sim,
+    )
+    violation_indices = set(map(lambda i: i["day"], res["violations"]))
+
+    # Create violation column
+    price_df = price_df.copy()
+    price_df["violation"] = 0
+    price_df.loc[price_df.index.isin(violation_indices), "violation"] = 1
+
+    # Create event column
+    price_df["event"] = price_df["Date"].isin(event_dates["Date"]).astype(int)
+
+    # Prepare analysis dataframes
+    df = price_df[["Date", "event", "violation"]].copy()
+
+    # Hypothesis A: Events cause violations (within k days after event)
+    df["violation_next_k"] = 0
+    for idx, row in df.iterrows():
+        # if row["event"] == 1:
+        future = df.iloc[idx + 1 : min(idx + 1 + k, len(df))]
+        if any(future["violation"]):
+            df.at[idx, "violation_next_k"] = 1
+
+    # Hypothesis B: Violations caused by events (within k days before violation)
+    df["event_prev_k"] = 0
+    for idx, row in df.iterrows():
+        # if row["violation"] == 1:
+        past = df.iloc[max(0, idx - k) : idx]
+        if any(past["event"]):
+            df.at[idx, "event_prev_k"] = 1
+
+    # Build contingency tables
+    df_A = df
+    contingency_A = pd.crosstab(
+        df_A["event"],
+        df_A["violation_next_k"],
+        rownames=["Event"],
+        colnames=["Violation in next k days"],
+    )
+
+    df_B = df  # Only consider days with violations
+    contingency_B = pd.crosstab(
+        df_B["violation"],
+        df_B["event_prev_k"],
+        rownames=["Violation"],
+        colnames=["Event in previous k days"],
+    )
+
+    # Chi-square tests
+    odds_ratio_A, p_value_A = fisher_exact(
+        contingency_A.values, alternative="two-sided"
+    )
+    # odds_ratio_A, p_value_A, _, _ = chi2_contingency(contingency_A.values, correction=True)
+    odds_ratio_B, p_value_B = fisher_exact(
+        contingency_B.values, alternative="two-sided"
+    )
+    # odds_ratio_B, p_value_B, _, _ = chi2_contingency(contingency_B.values, correction=True)
+
+    return {
+        "price_df": price_df,
+        "hypothesis_A": {
+            "contingency_table": contingency_A,
+            "odds_ratio": odds_ratio_A,
+            "p_value": p_value_A,
+        },
+        "hypothesis_B": {
+            "contingency_table": contingency_B,
+            "odds_ratio": odds_ratio_B,
+            "p_value": p_value_B,
+        },
+    }
 
 
 def verify_dist(prices):
@@ -261,27 +442,6 @@ def validate_ci_coverage(
     coverage = wins / total
     expected = 1 - alpha
 
-    # Plot results
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-
-    # Coverage plot
-    ax1.axhline(expected, color="r", linestyle="--", label="Expected Coverage")
-    ax1.bar(["Actual"], [coverage], label=f"Actual (n={total})")
-    ax1.set_ylim(0, 1)
-    ax1.set_title(f"CI Coverage ({window_size}-day windows)")
-    ax1.legend()
-
-    # Violation plot
-    if violations:
-        violation_days = [v["day"] for v in violations]
-        ax2.hist(violation_days, bins=20)
-        ax2.set_title("Distribution of CI Violations Over Time")
-        ax2.set_xlabel("Day in Series")
-    else:
-        ax2.text(0.5, 0.5, "No Violations", ha="center", va="center")
-
-    plt.tight_layout()
-
     return {
         "coverage_score": coverage,
         "expected_coverage": expected,
@@ -289,7 +449,7 @@ def validate_ci_coverage(
         "successful_windows": wins,
         "violation_rate": 1 - coverage,
         "violations": violations,
-    }, fig
+    }
 
 
 def plot_predictions_vs_outcomes(prices, actions, window=3):
@@ -435,7 +595,6 @@ def enhanced_evaluation(net_worth, actions, prices):
         )
 
 
-# Example usage in Streamlit app
 def policy_validation_page(logs, prices, window=7):
     st.title("Policy validation")
 
@@ -453,16 +612,109 @@ def policy_validation_page(logs, prices, window=7):
 # Streamlit App
 # ----------------------
 
+
+def chat_section(
+    risk,
+    auto_close,
+    forecast,
+    rsi,
+    expected_value,
+    ci,
+    hlc,
+    user_query="General forecast",
+):
+    user_input = st.chat_input("Ask something...")
+    if not user_input:
+        return
+    if user_input == "clear":
+        return
+
+    expanded_query = expand_query(
+        auto_close=auto_close,
+        risk=risk,
+        position_size=forecast / 10,
+        indicators={
+            "rsi": rsi,
+            "expected_value": expected_value,
+            "hlc": hlc,
+            "ci": ci,
+        },
+    )
+
+    st.header(f"Q: {user_input}")
+
+    st.header("Fundamental Insights")
+
+    rag_summary = summarize_rag_results(
+        lsa_rag_retrieve(st.session_state.symbol, auto_close)
+    )
+
+    with st.spinner("Fetching news..."):
+        news_summary = summarize_news(
+            fundamental.fetch_news(
+                st.session_state.symbol
+                if "USDT" not in st.session_state.symbol
+                else st.session_state.symbol[:-4]
+            )
+        )
+
+    # 5. Build and execute prompt
+    prompt = assemble_prompt(
+        expanded_query=expanded_query,
+        rag_summary=rag_summary,
+        news_summary=news_summary,
+        user_query=user_input,
+    )
+    print(prompt)
+
+    with st.spinner("Analyzing market conditions..."):
+        response = chatbot.reply(prompt)
+
+    st.markdown(f"## Trading Recommendation\n{response}")
+
+    # 7. Visual confirmation tools
+    st.download_button("Save Analysis", response, file_name="trading_analysis.md")
+
+
 def fundamentals_section():
     st.header("Fundamental Analysis")
 
     symbol = st.selectbox("Select symbol", ["SOL", "TRX", "ETH"])
+    alpha = st.number_input(
+        "Error (alpha)", value=0.05, min_value=0.03, max_value=0.99, step=0.01
+    )
+    k = st.number_input(
+        "Correlation window (k days)", value=7, min_value=1, max_value=30
+    )
+    size = st.number_input("Sample size (last `size` days)", value=500, min_value=100)
 
     tech = technical.AssetScraper()
-    fun = fundamental
+    pro = fundamental.ProtocolScraper()
+    dat = fundamental.DataProcessor()
 
-    if st.button("Run"):
-        filename = DB_DIR / f"{symbol}USDT.csv"
+    if st.button("Run Correlation Analysis"):
+        tech_filename = DB_DIR / f"{symbol}USDT.csv"
+        fun_filename = pro.raw_data_filename(symbol)
+        fun_data = dat.process_file(fun_filename)  # List of events with dates
+        tech_data = pd.read_csv(tech_filename, parse_dates=["Date"])[-size:]
+        tech_data = tech_data.reset_index()
+
+        results = run_correlation_analysis(
+            price_df=tech_data, events=fun_data, alpha=alpha, k=k
+        )
+
+        # Display results
+        st.subheader("Hypothesis A: Events Cause Price Violations")
+        st.write("Do events cause significant price changes within k days?")
+        display_results(results["hypothesis_A"])
+
+        st.subheader("Hypothesis B: Violations Caused by Events")
+        st.write("Are price violations preceded by events within k days?")
+        display_results(results["hypothesis_B"])
+
+        # Visualize timeline
+        st.subheader("Events and Violations Timeline")
+        plot_timeline(results["price_df"])
 
 
 def agents_section():
@@ -710,12 +962,22 @@ def main():
             (Path.home() / "Downloads").glob("*.csv")
         )
 
+        if update_required(csv_paths) or update_required(fundamental.ProtocolScraper().get_files()):
+            print("INFO - Data is out-of-date")
+            with st.spinner("Updating..."):
+                try:
+                    client.update()
+                    fundamental.update()
+                except Exception as exc:
+                    print("ERROR - Update failed")
+
         filename = st.selectbox("Select CSV", csv_paths)
 
         if st.button("Estimate parameters"):
             uploaded_file = open(filename)
             prices = load_csv(uploaded_file)
             st.session_state.prices = prices
+            st.session_state.symbol = filename.name.split(".")[-2]
 
             uploaded_file.close()
 
@@ -817,7 +1079,7 @@ def main():
 
         if st.button("Validate cofidence interval"):
             prices = st.session_state.prices
-            res, fig = validate_ci_coverage(
+            res = validate_ci_coverage(
                 prices,
                 window_size=T,
                 alpha=aleph,
@@ -825,16 +1087,36 @@ def main():
                 dynamic_estimation=dynamic_estimation,
                 lookback_days=lookback_days,
             )
-
-            with st.expander("Expectation VS Reality", expanded=True):
-                st.pyplot(fig)
-
             coverage = res["coverage_score"]
             expected = res["expected_coverage"]
             violations = res["violations"]
             violation_rate = res["violation_rate"]
             total = res["total_windows"]
             wins = res["successful_windows"]
+
+            # Plot results
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+            # Coverage plot
+            ax1.axhline(expected, color="r", linestyle="--", label="Expected Coverage")
+            ax1.bar(["Actual"], [res["coverage_score"]], label=f"Actual (n={total})")
+            ax1.set_ylim(0, 1)
+            ax1.set_title(f"CI Coverage ({T}-day windows)")
+            ax1.legend()
+
+            # Violation plot
+            if violations:
+                violation_days = [v["day"] for v in violations]
+                ax2.hist(violation_days, bins=20)
+                ax2.set_title("Distribution of CI Violations Over Time")
+                ax2.set_xlabel("Day in Series")
+            else:
+                ax2.text(0.5, 0.5, "No Violations", ha="center", va="center")
+
+            plt.tight_layout()
+
+            with st.expander("Expectation VS Reality", expanded=True):
+                st.pyplot(fig)
 
             with st.expander("CI Validation Stats", expanded=True):
                 st.markdown(
@@ -888,7 +1170,6 @@ def main():
             min_value=0,
             max_value=len(prices),
         )
-        days = st.multiselect("CI Days", [i for i in range(1, 31)], default=[5, 10, 30])
         days_to_verify = st.number_input("Days to verify", value=7, min_value=1)
         risk = st.number_input("Risk", value=risk_val)
 
@@ -901,7 +1182,33 @@ def main():
 
         best_risk = risk
         history = st.session_state.history
+
+        # indicators
+        forecast = policy.policy_agent(
+            prices, len(prices) - 1, best_risk, history, load=True
+        )["action"]
+        rsi = policy.policy_rsi(prices, len(prices) - 1, best_risk, history)["action"]
+        expected_value = policy.policy_expected_value(
+            prices, len(prices) - 1, best_risk, history
+        )["action"]
+        ci = stock_price_ci(prices, days_to_verify, best_risk, 100000)["ci"]
+        hlc = prices.max(), prices.min(), prices[-1]
+
+        symbol = st.session_state.symbol
+
+        chat_section(
+            risk=best_risk,
+            auto_close=days_to_verify,  # auto_close == days_to_verify
+            forecast=forecast,
+            rsi=rsi,
+            ci=ci,
+            expected_value=expected_value,
+            hlc=hlc,
+            user_query="General forecast",
+        )
+
         res = selected_policy(prices, len(prices) - 1, best_risk, history)
+
         forecast = res["action"]
         if forecast > 0:
             forecast = "BUY"
@@ -911,13 +1218,15 @@ def main():
             forecast = "WAIT"
         st.markdown(
             f"""
-            **Today's forecast**: {forecast}
-            - Price: {prices[-1]}
-            - Risk: {best_risk}
+            **Today's forecast for {symbol}**: {forecast}
+            - Price: {hlc[2]}
+            - High: {hlc[0]}
+            - Low: {hlc[1]}
+            - CI: ({ci[0]:.2f}, {ci[1]:.2f})
         """
         )
 
-        if st.button("Run once"):
+        if st.sidebar.button("Back-Test Policy"):
             state, logs = general_policy(
                 prices[:number_of_days],
                 state=start_state,
@@ -931,7 +1240,7 @@ def main():
     elif section == "Agents":
         agents_section()
     elif section == "Fundamental":
-        fundamental_section()
+        fundamentals_section()
     elif section == "Utils":
         T = st.number_input("Days (T)", value=350)
 
@@ -951,6 +1260,7 @@ def main():
 
 if __name__ == "__main__":
     if "prices" not in st.session_state:
+        st.session_state.symbol = ""
         st.session_state.prices = None
         st.session_state.history = []
     main()
