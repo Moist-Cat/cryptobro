@@ -3,7 +3,7 @@ import pickle
 import random
 import numpy as np
 
-from meta import load_csv, DB_DIR
+from meta import load_csv, DB_DIR, BIN_DIR
 from utils import get_log_ratios, calculate_rsi
 from agent.brain import Brain
 from agent.evaluate import fitness, evaluate
@@ -11,11 +11,11 @@ from agent.gene import _random_gene
 from agent.names import historical_figures
 from agent.config import EVAL_WINDOW
 
-MODEL_PATH = "/tmp/{name}.pickle"
+MODEL_NAME = "{name}.pickle"
 
 
 def save_object(obj, path=None):
-    path = path or Path(MODEL_PATH.format(name=obj.__class__.__name__.lower()))
+    path = path or BIN_DIR / Path(MODEL_NAME.format(name=obj.__class__.__name__.lower()))
 
     with open(path, "wb") as file:
         pickle.dump(obj, file)
@@ -23,18 +23,18 @@ def save_object(obj, path=None):
 
 
 def load_object(cls_name, path=None):
-    path = path or Path(MODEL_PATH.format(name=cls_name.lower()))
+    path = path or BIN_DIR / Path(MODEL_NAME.format(name=cls_name.lower()))
 
     with open(path, "rb") as file:
         obj = pickle.load(file)
     return obj
 
 
-def load_agent(path=MODEL_PATH):
+def load_agent(path=MODEL_NAME):
     return load_object("Agent")
 
 
-def save_agent(agent, path=MODEL_PATH):
+def save_agent(agent, path=MODEL_NAME):
     return save_object(agent)
 
 

@@ -5,10 +5,11 @@ import functools
 import inspect
 from datetime import datetime, timedelta, timezone
 
-from scipy.stats import laplace, gennorm, gamma
+from scipy.stats import laplace, gennorm, gamma, norm
 
 import pandas as pd
 
+#DIST = gennorm
 DIST = gennorm
 # DIST = laplace
 DIST_NAME = "gennorm"
@@ -18,7 +19,10 @@ BASE_DIR = Path(__file__).parent
 
 DB_DIR = BASE_DIR / "datasets"
 
+BIN_DIR = BASE_DIR / "bin"
+
 SUMMARIZER_ENDPOINT = "http://localhost:5000/summarize"
+
 
 def update_required(file_paths):
     """Check if any file was modified yesterday (local time) and trigger update"""
@@ -46,6 +50,7 @@ def update_required(file_paths):
         last_date = max(modified_utc, last_date)
 
     return last_date == current_date
+
 
 # comfy
 def get_algorithm_params(func):

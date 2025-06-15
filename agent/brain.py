@@ -9,36 +9,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from agent.config import PARAMS
 
 
-def penalize_young(count, desired_count=5):
-    """
-    Penalise events that haven't happened a lot by
-    softening its effects.
-    I.E. If we get a strong buy signal only once,
-     don't pay attention to it.
-
-     The algorithm is log_{desired_count} because
-
-     >>> penalize_young(5, desired_count=5)
-     1.0
-    """
-    if count > desired_count**2:
-        return 2
-    return log(count) / log(desired_count)
-
-
-def calculate_reconstruction_error(pca, vector_centered):
-
-    projected = pca.transform(
-        vector_centered.reshape(1, -1)
-        if len(vector_centered.shape) == 1
-        else vector_centered
-    )
-    reconstructed = pca.inverse_transform(projected)
-    error = np.linalg.norm(vector_centered - reconstructed) ** 2
-
-    return error
-
-
 class Brain:
     def __init__(
         self,
@@ -232,28 +202,12 @@ class Brain:
             return 0
 
         evaluations = np.zeros(len(cluster))
-        # weight = 1 / len(cluster)
         weight = 1
         for i in range(len(cluster)):
             evaluation, count = self.agent.evaluate(cluster[i])
-            # evaluations[i] = (
-            #    evaluation * weight * penalize_young(count + 1, desired_count=30)
-            # )
             evaluations[i] = evaluation
-        # take the closeness into consideration
-        # return np.dot(evaluations, sim_scores)[0]
-        #
-        # k-nn
-        # if (evaluations > 0).all():
-        #    return 1
-        # elif (evaluations < 0).all():
-        #    return -1
-        # else:
-        # print(cluster)
-        # print(evaluations)
         mini = evaluations.min()
         maxim = evaluations.max()
-        # med = np.median(evaluations)
         med = np.mean(evaluations)
 
         # We might have too little information to make
@@ -300,11 +254,7 @@ class Brain:
         closest_scores, closest_indices, cluster = self.compare(information)
         evaluation = self.evaluate(cluster, closest_scores)
 
-        # if not cluster.any():
-        #    # no idea
-        #    return [self._experiment()]
-
-        # print(evaluation, cluster, closest_scores)
+        # centroid
         # rule = self.create(cluster.mean(axis=0), evaluation)
         rule = self.create(information, evaluation)
         parent_feedback = []
@@ -340,11 +290,7 @@ class Brain:
     def _evaluate_cot(self, cot):
         # return np.array(cot).mean()
         p = np.array(cot).prod()
-        #print("INFO -", cot)
         return p
-        # if not p:
-        #    return np.array(cot).mean()
-        # return p
 
     @property
     def _is_dull(self):

@@ -12,7 +12,7 @@ from elasticsearch import Elasticsearch
 from typing import Dict, List, Optional
 import hashlib
 
-from meta import DB_DIR
+from meta import DB_DIR, BIN_DIR
 from retrieval.utils import Model, Document, DIMENSIONS
 
 # --------------------------
@@ -72,6 +72,9 @@ ASSET_METADATA = {
 
 
 def transform_cyptopanic(data):
+    if "results" not in data or not data["results"]:
+        return data
+
     return [
         {
             "title": item["title"],
@@ -82,6 +85,8 @@ def transform_cyptopanic(data):
     ]
 
 def transform_messari(data):
+    if "data" not in data or not data["data"]:
+        return []
     return [
         {
             "title": item["title"],
@@ -253,7 +258,7 @@ class ProtocolScraper:
 
 
 class DataProcessor:
-    def __init__(self, model=None, es_host: str = "localhost:9200"):
+    def __init__(self, es_host: str = "localhost:9200"):
         try:
             self.es = Elasticsearch(
                 os.environ.get("ELASTIC_URL", es_host),
@@ -294,6 +299,7 @@ class DataProcessor:
         """Process a single raw data file"""
         with open(filepath) as f:
             data = json.load(f)
+        print("INFO - Processing file", filepath)
 
         filename = os.path.basename(filepath)[:-5]
 
@@ -319,6 +325,8 @@ class DataProcessor:
                     processed[1],
                 )
             )
+
+        print("INFO - Creating DataFrame with processed data")
 
         return pd.DataFrame(res, columns=("Date", "Content"))
 
@@ -360,13 +368,14 @@ class DataProcessor:
         return data["published_date"], data["content"]
 
     def save(self):
-        with open("/tmp/lsi_model.pickle", "wb") as file:
+        with open(BIN_DIR / "lsi_model.pickle", "wb") as file:
             pickle.dump(self.model, file)
 
     def load(self):
-        if not Path("/tmp/lsi_model.pickle").exists():
+        if not Path(BIN_DIR / "lsi_model.pickle").exists():
             return None
-        with open("/tmp/lsi_model.pickle", "rb") as file:
+        print("INFO - Loading LSI model")
+        with open(BIN_DIR / "lsi_model.pickle", "rb") as file:
             return pickle.load(file)
 
 def update():

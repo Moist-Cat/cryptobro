@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import datetime
 
 import seaborn as sns
-from scipy.stats import chi2_contingency, fisher_exact
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -18,6 +17,8 @@ from matplotlib.patches import Rectangle
 from matplotlib.collections import PatchCollection
 import scipy
 from scipy.stats import (
+    chi2_contingency,
+    fisher_exact,
     norm,
     kstest,
     ttest_ind,
@@ -338,7 +339,7 @@ def run_correlation_analysis(price_df, event_dates, alpha=0.95, n_sim=1000, k=5)
     }
 
 
-def verify_dist(prices):
+def verify_dist(prices, dist=DIST, dist_name=DIST_NAME):
     """
     Check if price ratios Y_n = S_n/S_{n-1} are loglaplace.
     What's that? I mean that the logarithm returns a laplace.
@@ -670,7 +671,7 @@ def chat_section(
     with st.spinner("Analyzing market conditions..."):
         response = chatbot.reply(prompt)
 
-    st.markdown(f"## Trading Recommendation\n{response}")
+    st.write(f"## Trading Recommendation\n{response}")
 
     # 7. Visual confirmation tools
     st.download_button("Save Analysis", response, file_name="trading_analysis.md")
@@ -962,7 +963,9 @@ def main():
             (Path.home() / "Downloads").glob("*.csv")
         )
 
-        if update_required(csv_paths) or update_required(fundamental.ProtocolScraper().get_files()):
+        if update_required(csv_paths) or update_required(
+            fundamental.ProtocolScraper().get_files()
+        ):
             print("INFO - Data is out-of-date")
             with st.spinner("Updating..."):
                 try:

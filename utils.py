@@ -1,4 +1,3 @@
-# from statsmodels.tsa.api import ExponentialSmoothing
 from pathlib import Path
 import os
 
@@ -37,9 +36,9 @@ def get_log_ratios(prices):
     return log_ratios
 
 
-def estimate_parameters(prices):
+def estimate_parameters(prices, dist=DIST):
     """Estimate mu and sigma from price data."""
-    return DIST.fit(get_log_ratios(prices))
+    return dist.fit(get_log_ratios(prices))
 
 
 def simulate_prices(prices, N, num_paths=1, start=0, end=None):
@@ -105,7 +104,13 @@ def mc_ci(prices, start, end, days=7, alpha=0.05, n_sim=10000):
     Generate confidence intervals with a Monte Carlo simulation.
     """
     # Notice we take into account each day!
-    paths = simulate_prices(prices, days, n_sim, start=start, end=end)
+    paths = simulate_prices(
+        prices,
+        days,
+        num_paths=n_sim,
+        start=start,
+        end=end
+    )
 
     path_min = np.min(paths, axis=1)
     path_max = np.max(paths, axis=1)
@@ -188,7 +193,10 @@ def calculate_rsi(prices, current_index, period=10):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-
 if __name__ == "__main__":
-    mc_ci(100, 0, 0.03, days=7, alpha=0.1, n_sim=10000)
-    boot_ci(100, 0, 0.03, days=7, alpha=0.1, n_sim=10000)
+    with open("datasets/SOLUSDT.csv") as file:
+        prices = load_csv(file)
+
+    for i in range(1000):
+        print(i)
+        stock_price_ci(prices)

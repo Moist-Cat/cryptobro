@@ -44,6 +44,7 @@ VALUE_TO_TERM = {
     ),
 }
 
+
 class Chatbot:
     def __init__(self, model):
         self.model = model
@@ -63,11 +64,14 @@ class Chatbot:
         self._last_response = response
         return response.choices[0].message.content
 
+
 chatbot = Chatbot("gpt-4")
 
-def summarize_document(text, max_length=150):
+
+def summarize_document(text, max_length=150, algorithm="kmeans"):
     key_phrases = extract_key_phrases(
         text=text,
+        # fixed
         top_k=5,
     )
 
@@ -88,17 +92,28 @@ def summarize_news(articles: list, max_length=150, target=5 + 1) -> list:
 
     prompt = "- News Summary:"
     last_index = 0
-    for index in range(
-        len(articles) // target,
-        len(articles),
-        len(articles) // target
-    ):
+    for index in range(len(articles) // target, len(articles), len(articles) // target):
         # we use a set to avoid duplicates
         # when summarizing data from aggregators
-        block = "\n".join(
-            set([summarize_document(article["content"]) for article in articles[last_index:index]])
+        # NOTE In this step, we want to know the *general topic* of the article
+        # thus, we use the cosine similarity algorithm (most central vectors/embeddings)
+        # to extract it
+        # Three newlines to differenciate between articles
+        block = "\n\n\n".join(
+            set(
+                [
+                    summarize_document(article["content"], algorithm="cosim")
+                    for article in articles[last_index:index]
+                ]
+            )
         )
-        summary = summarize_document(block, max_length)
+        #print("DEBUG - Summary block:", block)
+        # Here we want to know the *most important topics* discussed in the
+        # blockーgiven the block contains several articles, there will be more than one
+        # different topics even if they are not central to all articles.
+        # We want to avoid redundancy as well.
+        summary = summarize_document(block, max_length, algorithm="kmeans")
+        # print("DEBUG - Result:", summary)
 
         prompt += "\n    * " + summary
 
@@ -118,7 +133,6 @@ def extract_key_phrases(text: str, top_k=10) -> list:
         return requests.post(SUMMARIZER_ENDPOINT, json=params).json()["summary"]
     except Exception as exc:
         print("ERROR -", exc)
-        breakpoint()
         return text
 
 
@@ -135,7 +149,6 @@ def abstractive_summary(text, max_length=150) -> str:
         return requests.post(SUMMARIZER_ENDPOINT, json=params).json()["summary"]
     except Exception as exc:
         print("ERROR -", exc)
-        breakpoint()
         return text
 
 
@@ -154,51 +167,52 @@ def summarize_rag_results(rag_results: tuple, max_age_days: int = 90) -> str:
     current_date = datetime.now()
     summary_parts = []
 
+    if (commits_df is None) or commits_df.empty:
+        print("WARNING - RAG returned no data")
+        return ""
+    print("INFO - Summarising RAG data")
+
     # 1. Fundamental Data Summary (Commits/Releases)
-    if not commits_df.empty:
-        # Convert dates and find most recent
-        latest_commit = commits_df["Date"].max()
-        days_since_commit = (current_date - latest_commit).days
+    # Convert dates and find most recent
+    latest_commit = commits_df["Date"].max()
+    days_since_commit = (current_date - latest_commit).days
 
-        # Check obsolescence
-        if days_since_commit <= max_age_days:
-            # Process most significant commits (top 3 by recency)
-            recent_commits = commits_df
-            commit_summaries = []
+    # Check obsolescence
+    commit_summaries = []
+    if days_since_commit <= max_age_days:
+        # Process most significant commits (top 3 by recency)
+        recent_commits = commits_df
 
+        for _, row in recent_commits.iterrows():
+            content = row["Content"]
 
-            for _, row in recent_commits.iterrows():
-                content = row["Content"]
+            # these are usually a bunch of bullet points
+            commit_summaries.append(summarize_document(content, algorithm="kmeans"))
 
-                commit_summaries.append(
-                    summarize_document(content)
-                )
-
-            summary_parts.append("Recent protocol developments:")
-            summary_parts.extend([f"• {s}" for s in commit_summaries])
+        summary_parts.append("Recent protocol developments:")
+        summary_parts.extend([f"• {s}" for s in commit_summaries])
 
     # 2. Price Impact Analysis
     # Don't do anything if we don't have recent commits
-    if not price_df.empty and commit_summaries:
+    if commit_summaries:
         # Merge fundamental events with price data
         merged_df = pd.merge(
             commits_df, price_df, on="Date", suffixes=("_fund", "_price")
         )
-        if not price_df.empty:
+        if not merged_df.empty:
             # Calculate price impact metrics
             impact_summary = []
             for _, row in merged_df.iterrows():
-                event_desc = (
-                    row["Content"].split(":")[0]
-                    if ":" in row["Content"]
-                    else row["Content"][:30]
-                )
-                impact_summary.append(
-                    f"{row['Date']}: {event_desc} → {row['Percent_Change']:.2f}%)"
-                )
+                impact_summary.append(f"{row['Date']}: {row['Percent_Change']:.2f}%)")
 
             summary_parts.append("\n📊 Price impact of protocol events:")
             summary_parts.extend([f"• {s}" for s in impact_summary])
+        else:
+            print(
+                "ERROR - Somehow, the date of the commits and the events never matched"
+            )
+
+    print("INFO - Created", len(summary_parts), "summaries on RAG data")
 
     return "\n".join(summary_parts)
 
@@ -293,9 +307,7 @@ def expand_query(
 
         if "ci" in indicators:
             low, high = indicators["ci"]
-            indicator_context.append(
-                f"Confidence Interval: ({low:.2f}, {high:.2f})"
-            )
+            indicator_context.append(f"Confidence Interval: [{low:.2f}, {high:.2f}]")
 
     position = "    * " + "\n    * ".join(position_characterisaton)
     notes = "    * " + "\n    * ".join(indicator_context)
@@ -345,6 +357,7 @@ Current time: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 5. QUANTIFY confidence level (1-10) based on evidence
 6. WARN about black swan risks if detected
 """
+
 
 if __name__ == "__main__":
     expanded = expand_query(

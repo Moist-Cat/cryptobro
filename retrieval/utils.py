@@ -101,6 +101,8 @@ class Model:
         """
         Predict relvant documents for one query
         """
+        print("INFO - Predicting data for query of len", len(query_text))
+
         query_text = self._preprocess_query(query_text)
         query_vec = self._query_to_lsi(query_text)
 
@@ -113,6 +115,8 @@ class Model:
         top_results.sort(reverse=True)
 
         matched_docs = [r[1] for r in top_results]
+
+        print("INFO - Returning", len(matched_docs), "docs")
 
         return matched_docs[:top_k]
 
