@@ -33,7 +33,7 @@ showstringspaces=false
 We present a novel hierarchical AI agent designed to address the limitations of Gaussian assumptions in financial time series modeling. The agent combines:
 
 \begin{enumerate}
-    \item A \textbf{Generalized Error Distribution (GED)\cite{giller2005}} framework to capture tail behavior and kurtosis, with confidence intervals derived under minimal moment constraints:
+    \item A \textbf{Generalized Error Distribution (GED)} framework to capture tail behavior and kurtosis, with confidence intervals derived under minimal moment constraints:
     \begin{equation*}
         f(x; \mu, \alpha, \beta) = \frac{\beta}{2\alpha\Gamma(1/\beta)} \exp\left(-\left(\frac{|x-\mu|}{\alpha}\right)^\beta\right)
     \end{equation*}
@@ -74,7 +74,7 @@ Accurate time series forecasting is a cornerstone of decision-making in systems 
 
 Where $\mathscr{F}_t$ represents all relevant information up to time $t$.
 
-Traditional models often assume price or demand increments follow a Brownian motion (BM)\cite{bachelier1900, wiener1923}, where changes over interval $[s, t]$ satisfy (among other hypothesis):
+Traditional models often assume price or demand increments follow a Brownian motion (BM)\cite{bachelier1900}\cite{wiener1923}, where changes over interval $[s, t]$ satisfy (among other hypothesis):
 \begin{equation}
     W_t - W_s \sim \mathcal{N}(0, \sigma^2(t-s)), 
 \end{equation}
@@ -105,7 +105,7 @@ In this paper, we address these limitations through three interconnected innovat
 
 Our approach diverges from BM in both distributional and structural assumptions. While BM treats all intervals as statistically identical, our hierarchical agent identifies \emph{regimes}---periods where dynamics shift (e.g., holiday seasons, harvest cycles). 
 
-The remainder of this paper is organized as follows: Section~\ref{sec:literature} critiques classical and machine learning approaches. Sections~\ref{sec:methodology}--\ref{sec:architecture} detail our GED-CI framework and hierarchical design. Sections~\ref{sec:experiments}--\ref{sec:conclusions} present empirical validation and implications.
+The remainder of this paper is organized as follows: Section~\ref{sec:literature} critiques classical and machine learning approaches. Sections~\ref{sec:methodology}--\ref{sec:architecture} detail our GED-CI framework and hierarchical design. Sections~\ref{sec:experiments}--\ref{sec:conclusion} present empirical validation and implications.
 
 \section{Literature}
 \label{sec:literature}
@@ -197,7 +197,7 @@ L, U = (
 
 Figure~\ref{fig:ci} compares empirical coverage rates:
 
-\begin{figure}[H]
+\begin{figure}[h]
     \centering
     \includegraphics[width=0.8\textwidth]{NORM.png}
     \includegraphics[width=0.8\textwidth]{GED.png}
@@ -205,15 +205,13 @@ Figure~\ref{fig:ci} compares empirical coverage rates:
     \label{fig:ci}
 \end{figure}
 
-Notice that in no case the Normal performs better than the GED.
-
 \section{Hierarchical Architecture}
 \label{sec:architecture}
 
 \subsection{Structural Overview}
 The agent consists of $L$ layers $\{\mathscr{L}_\ell\}_{\ell=1}^L$ with:
 
-\begin{table}[H]
+\begin{table}[h]
 \centering
 \caption{Layer functions and hyperparameters}
 \label{tab:layers}
@@ -253,11 +251,6 @@ This formula prioritizes genes from the more \emph{successful} agents are passed
 \caption{Fitness score progression across generations.}
 \label{fig:fitness}
 \end{figure}
-
-\subsection{Framework}
-
-In order to 
-
 
 \subsection{Cognitive structure}
 
@@ -324,9 +317,7 @@ Signals propagate from lower to upper layers. When an action is taken in a lower
 
 S: vector representing the current state
 
-\subsection{Inter-Agent Communication}
-
-In order to leverage information that doesn't reflect in the price---technical information---we use language models to retrieve news, protocol updates, and other fundamental information---details regarding this agent can be found in \emph{}.
+\subsection{Helper Agents}
 
 \section{Experiments}
 \label{sec:experiments}
@@ -334,7 +325,7 @@ In order to leverage information that doesn't reflect in the price---technical i
 \subsection{Experimental Design}
 We evaluate performance through two lenses:
 
-\begin{table}[H]
+\begin{table}[h]
 \centering
 \caption{Evaluation framework}
 \label{tab:eval}
@@ -343,11 +334,13 @@ We evaluate performance through two lenses:
 \textbf{Metric Category} & \textbf{Measures} \\
 \midrule
 Point Forecasting & Cumulative loss, Directional Accuracy \\
-Stress Caused & Maximum drawdown, Risk VS Reward, Variance \\
 Computational & Training Time per Epoch, Inference Latency \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Benchmark Comparison}
+Against three baselines:
 
 \subsection{Interactive Exploration}
 The companion application allows users to:
@@ -359,11 +352,6 @@ The companion application allows users to:
 \section{Conclusion}
 \label{sec:conclusions}
 
-\begin{itemize}
-    \item The CI generated under GED assumption outperform Normality-based CIs
-    \item A hierarchical cognitive structure captures strong regime changes
-\end{itemize}
-
 \section{Discussion}
 \label{sec:discussion}
 
@@ -371,10 +359,11 @@ The companion application allows users to:
 \subsection{Limitations and Mitigations}
 \begin{itemize}
 \item \textbf{Data Hunger}: Requires minimum 300 samples for stable GED fits
-\item \textbf{Compute Cost}: Hyperparameter optimization needs at least 50000 iterations to converge$^{citation required}$
-\item \textbf{Interpretability}: Since the agent generates knowledge via vector operations, interpretability is not straightforward
+\item \textbf{Compute Cost}:
+\item \textbf{Interpretability}:
 \end{itemize}
 
+\section*{References}
 \label{sec:references}
 
 \begin{thebibliography}{9}
@@ -390,17 +379,11 @@ Wiener, N. (1923). Differential Space. \textit{Journal of Mathematics and Physic
 Cont, R. (2001). \textit{Empirical propert Returns: Stylized Facts and Statistical Issues. Quantitative Finance}, 1(2), 223-236.
 \href{https://doi.org/10.1080/713665670}{\texttt{doi:10.1080/713665670}}
 
-\bibitem{giller2005}
-Giller, Graham L. (August 16, 2005).  \textit{A Generalized Error Distribution}.
-\href{https://doi.org/10.2139/ssrn.2265027}{\texttt{doi:10.2139/ssrn.2265027}}
-
 \bibitem{anderson2001}
 Anderson, L.W. \& Krathwohl, D.R. (2001). \textit{A Taxonomy for Learning, Teaching, and Assessing: A Revision of Bloom's Taxonomy of Educational Objectives}. Longman.
 
 \end{thebibliography}
 
-\section*{Appendices}
-\label{sec:appendices}
 \subsection*{A. Base Evolutionary Algorithm Pseudocode}
 \begin{lstlisting}
 
@@ -418,144 +401,5 @@ while current_generation < max_generations:
     deaths = step()
 
 \end{lstlisting}
-
-
-\subsection*{B. Data Acquisition and Processing Pipeline}
-\label{app:data}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.95\textwidth]{data_pipeline.png}
-\caption{End-to-end data processing workflow showing real-time integration of technical and fundamental sources}
-\label{fig:data_pipeline}
-\end{figure}
-
-\subsubsection*{B.1 Data Sources}
-\begin{itemize}
-\item \textbf{Technical Data}:
-\begin{itemize}
-\item \textit{Sources}: Binance API (OHLCV), Bybit (order book depth), CoinGecko (market cap)
-\item \textit{Frequency}: Real-time (WebSockets) + daily snapshots
-\item \textit{Structure}:
-\[\mathscr{T}_t = \{O_t, H_t, L_t, C_t, V_t, \nabla P_{t-24h}\}\]
-\end{itemize}
-
-\item \textbf{Fundamental Data}:
-\begin{itemize}
-\item \textit{News Aggregators}: Cryptopanic, CoinDesk RSS, Twitter API
-\item \textit{Protocol Updates}: GitHub commit histories, governance proposals
-\item \textit{On-chain}: Etherscan, Dune Analytics (for Ethereum-based assets)
-\end{itemize}
-\end{itemize}
-
-\subsubsection*{B.2 Protocol Update Processing}
-\begin{enumerate}
-\item \textbf{Vectorization via LSI (Latent Semantic Indexing)}:
-\begin{equation}
-\mathbf{M} = \begin{bmatrix}
-w_{11} & \cdots & w_{1n} \\
-\vdots & \ddots & \vdots \\
-w_{m1} & \cdots & w_{mn}
-\end{bmatrix} \xrightarrow{\text{SVD}} \mathbf{U}_k \mathbf{\Sigma}_k \mathbf{V}_k^T
-\end{equation}
-where $w_{ij}$ = TF-IDF weight of term $j$ in commit $i$
-
-\item \textbf{Similarity Retrieval}:
-\begin{equation}
-\text{sim}(\vec{q}, \vec{d}_i) = \cos\theta = \frac{\vec{q} \cdot \vec{d}_i}{\|\vec{q}\| \|\vec{d}_i\|}
-\end{equation}
-Top $k$ commits retrieved for each new update
-
-\item \textbf{Version Tracking}:
-\begin{table}[H]
-\centering
-\caption{Commit metadata schema}
-\begin{tabular}{ll}
-\toprule
-\textbf{Field} & \textbf{Description} \\
-\midrule
-\texttt{commit\_hash} & SHA-1 identifier \\
-\texttt{author} & Developer identity \\
-\texttt{timestamp} & UTC execution time \\
-\texttt{files\_changed} & Modified/added files \\
-\texttt{lsi\_vector} & $\mathbb{R}^{100}$ embedding \\
-\bottomrule
-\end{tabular}
-\end{table}
-\end{enumerate}
-
-\subsubsection*{B.3 Fundamental Data Integration in Chatbot Agent}
-The RAG pipeline operates as:
-\subsection*{B. Fundamental Data Augmentation Pseudocode}
-\begin{lstlisting}[language=Python, caption={Fundamental Data Augmentation Pipeline}]
-
-tech_context = technical_agent.query(prices[-1])
-    
-commit_vectors = lsi_model.transform(q)
-similar_commits = vector_db.similar(commit_vectors[-1])
-    
-relevant_news = news_db.search(query=symbol, time_filter='7d')
-
-news_summaries = [
-    bart_summarizer(article) 
-    for article in relevant_news
-]
-    
-prompt_template = f"""
-[Technical Context] {tech_context}
-[Protocol Updates] {similar_commits}
-[Market News] {news_summaries}
-[User Query] {q}
-"""
-    
-response = llm.generate()
-\end{lstlisting}
-
-\subsubsection*{B.4 Update Mechanism}
-\begin{itemize}
-\item \textbf{Technical Data}:
-\begin{itemize}
-\item Update automatically/on-demmand
-\end{itemize}
-
-\item \textbf{Fundamental Data}:
-\begin{itemize}
-\item Event-driven triggers (GitHub commits, news API)
-\end{itemize}
-\end{itemize}
-
-\subsection*{D. Chatbot Agent Architecture}
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.8\textwidth]{chatbot_architecture.png}
-\caption{Multi-agent collaboration framework showing data flow between components}
-\label{fig:chatbot_arch}
-\end{figure}
-
-% Summary of the entire document
-\section*{Executive Summary}
-This paper presents a hierarchical multi-agent framework for forecasting non-Gaussian financial time series. Key contributions include:
-
-\begin{itemize}
-\item \textbf{Distributional Innovation}: Replacement of Brownian motion assumptions with Generalized Error Distribution (GED) to model heavy-tailed asset returns
-\[
-f(x; \mu, \alpha, \beta) = \frac{\beta}{2\alpha\Gamma(1/\beta)} \exp\left(-\left(\frac{|x-\mu|}{\alpha}\right)^\beta\right)
-\]
-\item \textbf{Architectural Design}
-    \begin{itemize}
-    \item Layer 1: Technical analysis (GED volatility modeling)
-    \item Layer 2: Fundamental integration (LSI-processed protocol updates)
-    \item Layer 3: Evolutionary hyperparameter optimization
-    \end{itemize}
-
-\item \textbf{Data Pipeline}:
-    \begin{itemize}
-    \item Real-time technical data from crypto exchanges
-    \item Fundamental data processed via LSI and abstractive summarization
-    \item RAG-augmented chatbot interface
-    \end{itemize}
-\end{itemize}
-
-The framework demonstrates robust performance in both financial markets and inventory-sensitive applications, with open-source implementation available at: \url{https://github.com/Moist-Cat/cryptobro}
 
 \end{document}

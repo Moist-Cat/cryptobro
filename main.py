@@ -666,10 +666,11 @@ def chat_section(
         news_summary=news_summary,
         user_query=user_input,
     )
-    print(prompt)
 
     with st.spinner("Analyzing market conditions..."):
         response = chatbot.reply(prompt)
+
+    response.replace("$", "")
 
     st.write(f"## Trading Recommendation\n{response}")
 
