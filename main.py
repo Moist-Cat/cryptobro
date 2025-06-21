@@ -671,6 +671,7 @@ def chat_section(
         response = chatbot.reply(prompt)
 
     response.replace("$", "")
+    print(response)
 
     st.write(f"## Trading Recommendation\n{response}")
 

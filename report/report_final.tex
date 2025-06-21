@@ -250,14 +250,23 @@ This formula prioritizes genes from the more \emph{successful} agents are passed
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.7\textwidth]{fitness_evolution.pdf}
-\caption{Fitness score progression across generations.}
+\caption{Fitness score progression across generations. The red line represents aggregated fitness and the population is shown in blue. }
 \label{fig:fitness}
 \end{figure}
 
 \subsection{Framework}
 
-In order to 
+The process of optimizing hyperarameters is streamlined by aggregating crossing, mutating, and pruning unfit agents in a single framework (shown above).
+We included a few minor optimizations:
 
+\begin{itemize}
+    \item Added the concepts of "Money" and "Rent". Agents showing better fitness (making better choices) are rewarded in every iteration while a fixed rent deducts money from each agent equally.
+    \item Agents that run out of money are considered unfit and are removed from the gene pool.
+    \item The process of crossing agents is accelerated when the population is low to maintain the population (Note: this is somewhat counterintuitive so it might be changed later)
+    \item During the cross, parents "Teach" their children, sharing their experiences/memory (refer to the section below) with them.
+\end{itemize}
+
+The variance in the value of each gene is shown as well in order to evaluate convergence.
 
 \subsection{Cognitive structure}
 
@@ -278,7 +287,7 @@ The agent's learning progression follows a modified Bloomian taxonomy \cite{ande
         The age of a memory is determined by the difference between the index of the current state and the index of the
         state in which the memory was last accessed.
         We will define \emph{accessed} in the next section.
-\item \textbf{Parameters}: Number of columns in the memory matrix
+\item \textbf{Parameters}: Number of columns in the memory matrix.
 \end{itemize}
 
 \subsubsection{Component B: Comparision Engine}
@@ -326,7 +335,7 @@ S: vector representing the current state
 
 \subsection{Inter-Agent Communication}
 
-In order to leverage information that doesn't reflect in the price---technical information---we use language models to retrieve news, protocol updates, and other fundamental information---details regarding this agent can be found in \emph{}.
+In order to leverage information that doesn't reflect in the price---technical information---we use language models to retrieve news, protocol updates, and other fundamental information---details regarding this agent can be found in \ref{sec:appendices}.
 
 \section{Experiments}
 \label{sec:experiments}
@@ -367,11 +376,10 @@ The companion application allows users to:
 \section{Discussion}
 \label{sec:discussion}
 
-\subsection{Interpretation of Results}
 \subsection{Limitations and Mitigations}
 \begin{itemize}
 \item \textbf{Data Hunger}: Requires minimum 300 samples for stable GED fits
-\item \textbf{Compute Cost}: Hyperparameter optimization needs at least 50000 iterations to converge$^{citation required}$
+\item \textbf{Compute Cost}: Hyperparameter optimization needs at least 50000 iterations to converge$^{\emph{citation required}}$
 \item \textbf{Interpretability}: Since the agent generates knowledge via vector operations, interpretability is not straightforward
 \end{itemize}
 
@@ -434,17 +442,17 @@ while current_generation < max_generations:
 \begin{itemize}
 \item \textbf{Technical Data}:
 \begin{itemize}
-\item \textit{Sources}: Binance API (OHLCV), Bybit (order book depth), CoinGecko (market cap)
-\item \textit{Frequency}: Real-time (WebSockets) + daily snapshots
+\item \textit{Sources}: Binance API (OHLCV)
+\item \textit{Frequency}: Daily snapshots
 \item \textit{Structure}:
 \[\mathscr{T}_t = \{O_t, H_t, L_t, C_t, V_t, \nabla P_{t-24h}\}\]
 \end{itemize}
 
 \item \textbf{Fundamental Data}:
 \begin{itemize}
-\item \textit{News Aggregators}: Cryptopanic, CoinDesk RSS, Twitter API
+\item \textit{News Aggregators}: Cryptopanic, Messari
 \item \textit{Protocol Updates}: GitHub commit histories, governance proposals
-\item \textit{On-chain}: Etherscan, Dune Analytics (for Ethereum-based assets)
+\item \textit{On-chain}: (Planned)
 \end{itemize}
 \end{itemize}
 
@@ -484,8 +492,6 @@ Top $k$ commits retrieved for each new update
 \end{table}
 \end{enumerate}
 
-\subsubsection*{B.3 Fundamental Data Integration in Chatbot Agent}
-The RAG pipeline operates as:
 \subsection*{B. Fundamental Data Augmentation Pseudocode}
 \begin{lstlisting}[language=Python, caption={Fundamental Data Augmentation Pipeline}]
 
@@ -511,7 +517,7 @@ prompt_template = f"""
 response = llm.generate()
 \end{lstlisting}
 
-\subsubsection*{B.4 Update Mechanism}
+\subsubsection*{B.2 Update Mechanism}
 \begin{itemize}
 \item \textbf{Technical Data}:
 \begin{itemize}
